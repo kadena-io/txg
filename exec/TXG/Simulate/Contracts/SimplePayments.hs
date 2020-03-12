@@ -1,11 +1,11 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes       #-}
-{-# LANGUAGE TypeApplications  #-}
+{-# LANGUAGE DeriveGeneric    #-}
+{-# LANGUAGE QuasiQuotes      #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- |
 module TXG.Simulate.Contracts.SimplePayments where
 
+import           BasePrelude
 import           Chainweb.Utils
 import           Chainweb.Version
 import           Data.Aeson
@@ -21,7 +21,6 @@ import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           System.Random
-import           Text.Printf
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Utils
 

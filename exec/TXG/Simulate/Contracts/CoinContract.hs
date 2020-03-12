@@ -1,13 +1,12 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeApplications  #-}
+{-# LANGUAGE DeriveGeneric    #-}
+{-# LANGUAGE TypeApplications #-}
 
 module TXG.Simulate.Contracts.CoinContract where
 
+import           BasePrelude
 import           Chainweb.Utils
 import           Chainweb.Version
 import           Data.Aeson
-import           Data.Bool
 import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.Strict as M
@@ -18,7 +17,6 @@ import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           System.Random
-import           Text.Printf
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Utils
 
@@ -76,7 +74,7 @@ createCoinContractRequest
     -> IO (Command Text)
 createCoinContractRequest v meta ks request =
     case request of
-      CoinCreateAccount (Account account) (Guard guard) -> do
+      CoinCreateAccount (Account account) (Guard g) -> do
         let theCode =
               printf
               "(coin.create-account \"%s\" (read-keyset \"%s\"))"
@@ -84,7 +82,7 @@ createCoinContractRequest v meta ks request =
               ("create-account-guard" :: String)
             theData =
               object
-                [ "create-account-guard" .= fmap (formatB16PubKey . fst) guard
+                [ "create-account-guard" .= fmap (formatB16PubKey . fst) g
                 ]
         mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ toText v) Nothing
       CoinAccountBalance (Account account) -> do
@@ -94,7 +92,7 @@ createCoinContractRequest v meta ks request =
               "(coin.get-balance \"%s\")"
               account
         mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ toText v) Nothing
-      CoinTransferAndCreate (SenderName (Account sn)) (ReceiverName (Account rn)) (Guard guard) (Amount amount) -> do
+      CoinTransferAndCreate (SenderName (Account sn)) (ReceiverName (Account rn)) (Guard g) (Amount amount) -> do
         let theCode =
               printf
               "(coin.transfer-create \"%s\" \"%s\" (read-keyset \"%s\") %f)"
@@ -104,7 +102,7 @@ createCoinContractRequest v meta ks request =
               (fromRational @Double $ toRational amount)
             theData =
               object
-                [ "receiver-guard" .= fmap (formatB16PubKey . fst) guard
+                [ "receiver-guard" .= fmap (formatB16PubKey . fst) g
                 ]
         mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ toText v) Nothing
 

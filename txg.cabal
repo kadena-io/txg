@@ -22,6 +22,10 @@ executable txg
     -Wincomplete-uni-patterns -Widentities -funclutter-valid-hole-fits
     -threaded -rtsopts -with-rtsopts=-N
 
+  default-extensions:
+    NoImplicitPrelude
+    OverloadedStrings
+
   other-modules:
     TXG.Simulate.Contracts.CoinContract
     TXG.Simulate.Contracts.Common

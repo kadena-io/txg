@@ -1,10 +1,8 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module TXG.Simulate.Utils where
 
+import           BasePrelude
 import           Chainweb.Utils
 import           Chainweb.Version
-import           Control.Monad.IO.Class
 import           Data.Aeson
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Base16 as B16

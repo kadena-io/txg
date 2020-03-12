@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DerivingStrategies         #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeApplications           #-}
 
@@ -34,6 +33,7 @@ module TXG.Simulate.Contracts.Common
   , defTTL
   ) where
 
+import           BasePrelude
 import           Chainweb.ChainId
 import           Chainweb.Time
 import           Chainweb.Utils
@@ -44,20 +44,17 @@ import           Data.Aeson
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
-import           Data.Char
 import           Data.Decimal
 import           Data.FileEmbed
 import qualified Data.HashMap.Strict as HM
 import           Data.List (uncons)
 import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NEL
-import           Data.Maybe
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Text.Encoding
 import qualified Data.Yaml as Y
 import           Fake
-import           GHC.Generics hiding (from, to)
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
 import           Pact.Parse
 import qualified Pact.Types.ChainId as CM
@@ -65,7 +62,6 @@ import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           Pact.Types.Crypto
 import           Pact.Types.Gas
-import           Text.Printf
 import           TXG.Simulate.Utils
 
 ---

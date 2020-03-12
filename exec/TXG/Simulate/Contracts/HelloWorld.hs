@@ -1,6 +1,5 @@
-{-# LANGUAGE DeriveGeneric     #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes       #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE QuasiQuotes   #-}
 
 -- | Module: Main
 -- Copyright: Copyright © 2018 - 2020 Kadena LLC.
@@ -13,6 +12,7 @@
 
 module TXG.Simulate.Contracts.HelloWorld where
 
+import           BasePrelude
 import           Chainweb.Utils
 import           Chainweb.Version
 import           Data.Aeson
@@ -23,7 +23,6 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import           Fake
 import           Fake.Provider.Person.EN_US
-import           GHC.Generics
 import           NeatInterpolation
 import           Pact.ApiReq (mkExec)
 import           Pact.Types.ChainId
