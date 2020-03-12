@@ -1,5 +1,7 @@
 resolver: lts-14.27
 
+ghc-options: {"$locals": -ddump-to-file -ddump-hi}
+
 extra-deps:
   # --- Transitive Pact Deps --- #
   - ed25519-donna-0.1.1
