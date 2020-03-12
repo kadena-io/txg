@@ -3,7 +3,6 @@
 -- in ghci.  Do not depend on this module from important code!
 
 {-# LANGUAGE DataKinds           #-}
-{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {-# OPTIONS_GHC -fno-warn-missing-signatures #-}
@@ -54,6 +53,7 @@ module TXG.Repl
   , module TXG.Simulate.Contracts.CoinContract
   ) where
 
+import           BasePrelude
 import           Chainweb.ChainId
 import           Chainweb.HostAddress
 import           Chainweb.Version
@@ -168,7 +168,7 @@ transfer from to amt = do
 
 -- | Convenience function for constructing a transfer-and-create transaction
 transferCreate :: Text -> Text -> Guard -> Double -> IO [Command Text]
-transferCreate from to guard amt = do
+transferCreate from to g amt = do
   k <- stockKey from
   let meta = defPubMeta { _pmSender = from }
   kps <- mkKeyPairs [k]
@@ -176,7 +176,7 @@ transferCreate from to guard amt = do
     CallBuiltin $ CC $ CoinTransferAndCreate
       (SenderName $ Account $ T.unpack from)
       (ReceiverName $ Account $ T.unpack to)
-      guard
+      g
       (Amount $ realFracToDecimal 12 amt)
 
 mkKeyset :: Text -> [PublicKeyBS] -> Value

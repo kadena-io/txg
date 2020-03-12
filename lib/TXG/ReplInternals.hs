@@ -1,58 +1,44 @@
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {-# OPTIONS_GHC -fno-warn-missing-signatures #-}
 
 module TXG.ReplInternals where
 
-import Control.Lens
-import Control.Monad
-import Control.Monad.State
-
-import Data.Aeson
-import Data.Decimal
-import Data.Default
+import           BasePrelude
+import           Chainweb.ChainId
+import           Chainweb.HostAddress
+import           Chainweb.Pact.RestAPI.Client
+import           Chainweb.Version
+import           Control.Lens
+import           Control.Monad.State
+import           Data.Aeson
+import           Data.Decimal
+import           Data.Default
 import qualified Data.List.NonEmpty as NEL
-import Data.Text (Text)
+import           Data.Text (Text)
 import qualified Data.Text as T
-
-import Network.HTTP.Client hiding (Proxy(..))
-import Network.HTTP.Client.TLS
-import Network.X509.SelfSigned
-
-import Servant.Client
-
-import System.Random
-
-import Text.Printf
-
--- pact imports
-
-import Pact.ApiReq
-import Pact.Types.API
-import Pact.Types.ChainId (NetworkId(..))
-import Pact.Types.ChainMeta
-import Pact.Types.Command
-import Pact.Types.Hash
-
--- chainweb imports
-
-import Chainweb.ChainId
-import Chainweb.HostAddress
-import Chainweb.Pact.RestAPI.Client
-import Chainweb.Version
-
-import TXG.Simulate.Contracts.CoinContract
-import TXG.Simulate.Contracts.HelloWorld
-import TXG.Simulate.Contracts.SimplePayments
-import TXG.Simulate.Utils
+import           Network.HTTP.Client hiding (Proxy(..))
+import           Network.HTTP.Client.TLS
+import           Network.X509.SelfSigned
+import           Pact.ApiReq
+import           Pact.Types.API
+import           Pact.Types.ChainId (NetworkId(..))
+import           Pact.Types.ChainMeta
+import           Pact.Types.Command
+import           Pact.Types.Hash
+import           Servant.Client
+import           System.Random
+import           TXG.Simulate.Contracts.CoinContract
+import           TXG.Simulate.Contracts.HelloWorld
+import           TXG.Simulate.Contracts.SimplePayments
+import           TXG.Simulate.Utils
 
 -- for ghci
 
 data Network = Network
   { networkVersion :: ChainwebVersion
-  , networkHost :: HostAddress
+  , networkHost    :: HostAddress
   , networkChainId :: ChainId
   } deriving (Eq,Ord,Show)
 
@@ -179,8 +165,8 @@ generateDefaultSimpleCommands batchsize =
 genClientEnv :: HostAddress -> IO ClientEnv
 genClientEnv hostaddress = do
     mgrSettings <- certificateCacheManagerSettings TlsInsecure Nothing
-    let timeout = responseTimeoutMicro $ 1000000 * 60 * 4
-    mgr <- newTlsManagerWith $ mgrSettings { managerResponseTimeout = timeout }
+    let tout = responseTimeoutMicro $ 1000000 * 60 * 4
+    mgr <- newTlsManagerWith $ mgrSettings { managerResponseTimeout = tout }
     let url = BaseUrl Https
               (T.unpack . hostnameToText $ _hostAddressHost hostaddress)
               (fromIntegral $ _hostAddressPort hostaddress)
