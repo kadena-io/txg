@@ -95,8 +95,7 @@ createCoinAccount v meta name = do
     pure (nameKeyset, res)
   where
     theCode = printf "(coin.create-account \"%s\" (read-keyset \"%s\"))" name name
-    isSenderAccount name'  =
-      elem name' (map getAccount coinAccountNames)
+    isSenderAccount name' = name' `elem` map getAccount coinAccountNames
 
     getKeyset :: IO [SomeKeyPairCaps]
     getKeyset
@@ -112,7 +111,7 @@ createCoinAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NonEmpty (NonEmpty
 createCoinAccounts v meta = traverse (createCoinAccount v meta) names
 
 coinAccountNames :: [Account]
-coinAccountNames = (Account . ("sender0" <>) . show) <$> [0 :: Int .. 9]
+coinAccountNames = Account . ("sender0" <>) . show <$> [0 :: Int .. 9]
 
 stockKeyFile :: ByteString
 stockKeyFile = $(embedFile "pact/genesis/devnet/keys.yaml")

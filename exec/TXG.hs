@@ -164,7 +164,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         case contractIndex of
           CoinContract -> coinContract tGasLimit tGasPrice tTTL version ifCoinOnlyTransfers isVerbose cid $ accounts "coin" accs
           HelloWorld -> (Nothing,) <$> (generate fake >>= helloRequest version)
-          Payments -> (Nothing,) <$> (payments tGasLimit tGasPrice tTTL version cid $ accounts "payment" accs)
+          Payments -> (Nothing,) <$> payments tGasLimit tGasPrice tTTL version cid (accounts "payment" accs)
       generateDelay >>= liftIO . threadDelay
       pure (cid, mmsgs, cmds)
   where
@@ -192,8 +192,10 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
             case coinContractRequest of
               CoinCreateAccount account (Guard guardd) -> (account, guardd)
               CoinAccountBalance account -> acclookup account
-              CoinTransfer (SenderName sn) rcvr amt -> (mkTransferCaps rcvr amt) $ acclookup sn
-              CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt -> (mkTransferCaps rcvr amt) (acc, guardd)
+              CoinTransfer (SenderName sn) rcvr amt ->
+                mkTransferCaps rcvr amt $ acclookup sn
+              CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
+                mkTransferCaps rcvr amt (acc, guardd)
       meta <- Sim.makeMetaWithSender sender ttl gp gl cid
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
@@ -249,7 +251,7 @@ loop f = do
       lift . logg Info $ toLogMessage ("Transaction count: " <> sshow count :: Text)
       lift . logg Info $ toLogMessage ("Transaction requestKey: " <> sshow rk :: Text)
       forM_ (Compose msgs) $ \m ->
-        lift . logg Info $ toLogMessage $ ("Actual transaction: " <> m :: Text)
+        lift . logg Info $ toLogMessage ("Actual transaction: " <> m :: Text)
 
   loop f
 
@@ -265,9 +267,10 @@ loadContracts config host contractLoaders = do
     contracts <- traverse (\f -> f meta ts) contractLoaders
     pollresponse <- runExceptT $ do
       rkeys <- ExceptT $ runClientM (pactSendApiClient v cid $ SubmitBatch contracts) ce
-      when vb $ do
-            withConsoleLogger Info $ do
-                logg Info $ "sent contracts with request key: " <> sshow rkeys
+      when vb
+        $ withConsoleLogger Info
+        $ logg Info
+        $ "sent contracts with request key: " <> sshow rkeys
       ExceptT $ runClientM (pactPollApiClient v cid . Poll $ _rkRequestKeys rkeys) ce
     withConsoleLogger Info . logg Info $ sshow pollresponse
 
@@ -478,14 +481,14 @@ work cfg = do
       & U.logConfigTelemetryBackend . enableConfigConfig . U.backendConfigHandle .~ transH
 
     act :: TVar TXCount -> HostAddress -> LoggerT SomeLogMessage IO ()
-    act tv host@(HostAddress h p) = localScope (\_ -> [(toText h, toText p)]) $ do
+    act tv host@(HostAddress h p) = localScope (const [(toText h, toText p)]) $
       case scriptCommand cfg of
         DeployContracts [] -> liftIO $ do
           let v = nodeVersion cfg
           loadContracts cfg host $ NEL.cons (initAdminKeysetContract v) (defaultContractLoaders v)
         DeployContracts cs -> liftIO $ do
           let v = nodeVersion cfg
-          loadContracts cfg host $ (initAdminKeysetContract v) :| map (createLoader v) cs
+          loadContracts cfg host $ initAdminKeysetContract v :| map (createLoader v) cs
         RunStandardContracts distribution ->
           realTransactions cfg host tv distribution
         RunCoinContract distribution ->
