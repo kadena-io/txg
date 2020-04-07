@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveGeneric    #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes      #-}
 {-# LANGUAGE TypeApplications #-}
 
@@ -6,10 +8,7 @@
 module TXG.Simulate.Contracts.SimplePayments where
 
 import           BasePrelude
-import           Chainweb.Utils
-import           Chainweb.Version
 import           Data.Aeson
-import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.Strict as M
 import           Data.Text (Text)
@@ -23,13 +22,14 @@ import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           System.Random
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Utils
+import           TXG.Utils
 
 ---
 
 simplePaymentsContractLoader :: ChainwebVersion -> PublicMeta -> NonEmpty SomeKeyPairCaps -> IO (Command Text)
 simplePaymentsContractLoader v meta adminKS = do
     let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
-    mkExec (T.unpack theCode) theData meta (NEL.toList adminKS) (Just $ NetworkId $ toText v) Nothing
+    mkExec (T.unpack theCode) theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = [text| ;; Simple accounts model.
 ;;
@@ -122,15 +122,15 @@ simplePayReq v meta (SPCreateAccount (Account account) (Balance initBal) ks) _ =
   let theCode = printf "(payments.create-account \"%s\" %s)" account (show initBal)
       theData = object [ "keyset" .= fmap (formatB16PubKey . fst) ks
                        , "admin-keyset" .= fmap (formatB16PubKey . fst) adminKS ]
-  mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ toText v) Nothing
+  mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq v meta (SPRequestGetBalance (Account account)) _ = do
   adminKS <- testSomeKeyPairs
   let theCode = printf "(payments.get-balance \"%s\")" account
-  mkExec theCode Null meta (NEL.toList adminKS) (Just $ NetworkId $ toText v) Nothing
+  mkExec theCode Null meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq v meta (SPRequestPay (Account from) (Account to) (Amount amount)) (Just ks) = do
   let theCode = printf "(payments.pay \"%s\" \"%s\" %s)" from to (show amount)
-  mkExec theCode Null meta (NEL.toList ks) (Just $ NetworkId $ toText v) Nothing
+  mkExec theCode Null meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq _ _ _ _ = error "simplePayReq: impossible"

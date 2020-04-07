@@ -2,6 +2,8 @@
 -- functions are very unsafe because they are designed for maximum convenience
 -- in ghci.  Do not depend on this module from important code!
 
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -13,9 +15,9 @@
 module TXG.Repl
   (
   -- * Core functions
-    send
-  , poll
-  , local
+    pactSend
+  , pactPoll
+  , pactLocal
   , cmd
 
   -- * Specific kinds of transactions
@@ -47,16 +49,11 @@ module TXG.Repl
   , testModuleUpdates
   , verToPactNetId
 
-  , module Chainweb.ChainId
-  , module Chainweb.Version
   , module Pact.Types.ChainMeta
   , module TXG.Simulate.Contracts.CoinContract
   ) where
 
 import           BasePrelude
-import           Chainweb.ChainId
-import           Chainweb.HostAddress
-import           Chainweb.Version
 import           Control.Exception
 import           Control.Lens hiding (from, to, (.=))
 import           Control.Monad (forM)
@@ -78,6 +75,7 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Text.Encoding
 import           Data.Time.Clock.POSIX
+import           Network.HostAddress
 import           Pact.ApiReq
 import           Pact.GasModel.Utils
 import           Pact.Parse
@@ -89,14 +87,15 @@ import           Pact.Types.Crypto
 import           Pact.Types.Gas
 import           Pact.Types.Scheme
 import           Pact.Types.Util
-import           Servant.Client
 import           System.Time.Extra
+import           System.IO.Unsafe
 import           Test.RandomStrings
 import           Text.Printf
 import           TXG.ReplInternals
 import           TXG.Simulate.Contracts.CoinContract
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Utils
+import           TXG.Utils
 
 ---
 
@@ -116,11 +115,11 @@ instance IsString RequestKey where
 
 -- | Easy way to construct a ChainId
 chain :: Int -> ChainId
-chain n = fromJust $ chainIdFromText $ T.pack $ show n
+chain n = ChainId n
 
 -- | ChainId for the most commonly used chain
 chain0 :: ChainId
-chain0 = fromJust $ chainIdFromText "0"
+chain0 = ChainId 0
 
 -- | Decodes a base16-encoded key into a ByteString
 mkKeyBS :: Text -> ByteString
@@ -224,7 +223,7 @@ verToPactNetId cvw =
 pollResponse :: Network -> Either ClientError RequestKeys -> IO ()
 pollResponse _nw (Left err) = putStrLn $ "There was a failure in the send: " ++ show err
 pollResponse nw (Right rks) = do
-  pollResp <- poll nw rks
+  pollResp <- pactPoll nw rks
   case pollResp of
     Left err            -> putStrLn $ "Poll error: " ++ show err
     Right pollResponses -> print pollResponses
@@ -232,7 +231,7 @@ pollResponse nw (Right rks) = do
 listenResponse :: Network -> Either ClientError RequestKeys -> IO ()
 listenResponse _nw (Left err) = putStrLn $ "There was a failure in the send: " ++ show err
 listenResponse nw (Right (RequestKeys (k :| []))) = do
-  listResp <- listen nw k
+  listResp <- pactListen nw k
   case listResp of
     Left err         -> putStrLn $ "Listen error: " ++ show err
     Right listenResp -> print listenResp
@@ -333,7 +332,8 @@ _cid :: ChainId
 _cid = verToChainIdMin _ver
 
 _nw :: Network
-_nw = Network _ver _hostAddr _cid
+_nw = unsafePerformIO $ mkNetwork _ver _hostAddr _cid
+{-# NOINLINE _nw #-}
 
 _metaIO :: IO PublicMeta
 _metaIO = makeMeta _cid defTTL defGasPrice defGasLimit
@@ -379,7 +379,7 @@ _moduleCount = do
   _sendIt theCmd
 
 _sendThem :: [Command Text] -> IO (Either ClientError RequestKeys)
-_sendThem theCmds = send _nw theCmds
+_sendThem theCmds = pactSend _nw theCmds
 
 _tblRows :: IO (Either ClientError RequestKeys)
 _tblRows = do

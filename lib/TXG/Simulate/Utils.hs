@@ -1,12 +1,12 @@
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
+
 module TXG.Simulate.Utils where
 
 import           BasePrelude
-import           Chainweb.Utils
-import           Chainweb.Version
 import           Data.Aeson
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Base16 as B16
-import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Text (Text)
 import           Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
@@ -18,6 +18,7 @@ import           Pact.Types.Crypto
     (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), SomeKeyPair,
     formatPublicKey)
 import           Pact.Types.Util (toB16Text)
+import           TXG.Utils
 
 ---
 
@@ -66,7 +67,7 @@ initAdminKeysetContract
     -> NonEmpty SomeKeyPairCaps
     -> IO (Command Text)
 initAdminKeysetContract v meta adminKS =
-  mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ toText v) Nothing
+  mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = "(define-keyset 'admin-keyset (read-keyset \"admin-keyset\"))"
     theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
