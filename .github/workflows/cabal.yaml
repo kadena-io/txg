@@ -81,6 +81,8 @@ jobs:
           ghc-options: -Wwarn
         package txg
           ghc-options: -Wwarn
+        package cassava
+            flags: -bytestring--LT-0_10_4
         allow-newer:
           *:*
         constraints:
