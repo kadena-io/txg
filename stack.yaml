@@ -25,7 +25,7 @@ extra-deps:
   - random-strings-0.1.1.0
 
 flags:
-  hostadress:
+  hostaddress:
     with-configuration-tools: true
-  configurationt-tools:
+  configuration-tools:
     remote-configs: false
