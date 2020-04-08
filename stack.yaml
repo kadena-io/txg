@@ -23,3 +23,9 @@ extra-deps:
   - hostaddress-0.1.0.0
   - optparse-applicative-0.15.1.0
   - random-strings-0.1.1.0
+
+flags:
+  hostadress:
+    with-configuration-tools: true
+  configurationt-tools:
+    remote-configs: false
