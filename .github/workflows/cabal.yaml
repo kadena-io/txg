@@ -117,7 +117,7 @@ jobs:
       run: |
         mkdir -p artifacts/applications
         export VER=$(grep '^version' txg.cabal | sed -e 's/.*: *//')
-        cp dist-newstyle/build/*/ghc-${{ matrix.ghc }}/txg-${VER}/opt/build/*/txg artifacts/applications
+        cp dist-newstyle/build/*/ghc-${{ matrix.ghc }}/txg-${VER}/x/txg/build/txg/txg artifacts/applications
     - name: Publish applications
       uses: actions/upload-artifact@v1
       with:
