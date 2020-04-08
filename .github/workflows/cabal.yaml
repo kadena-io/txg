@@ -87,7 +87,12 @@ jobs:
         allow-newer:
           *:*
         constraints:
-          megaparsed <8
+          megaparsec <8
+        source-repository-package
+          type: git
+          location: https://github.com/well-typed/optics
+          tag: 95760a121023b6314a1b1a92939fc97613ec5645
+          subdir: optics-core
     - uses: actions/cache@v1
       name: Cache dist-newstyle
       with:
