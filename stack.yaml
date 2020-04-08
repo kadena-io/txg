@@ -18,3 +18,8 @@ extra-deps:
   # --- Other Transitive Deps --- #
   - streaming-with-0.2.2.1
 
+  - base64-0.4.1
+  - fake-0.1.1.3
+  - hostaddress-0.1.0.0
+  - optparse-applicative-0.15.1.0
+  - random-strings-0.1.1.0
