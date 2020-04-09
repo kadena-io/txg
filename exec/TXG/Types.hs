@@ -209,7 +209,7 @@ defaultArgs = Args
   }
   where
     v :: ChainwebVersion
-    v = fromJuste $ chainwebVersionFromText "timedCPM-peterson"
+    v = Development
 
 scriptConfigParser :: MParser Args
 scriptConfigParser = id
