@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes   #-}
 
 -- | Module: Main
@@ -13,11 +15,8 @@
 module TXG.Simulate.Contracts.HelloWorld where
 
 import           BasePrelude
-import           Chainweb.Utils
-import           Chainweb.Version
 import           Data.Aeson
 import           Data.Default
-import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -28,8 +27,8 @@ import           Pact.ApiReq (mkExec)
 import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
-import           Text.Printf (printf)
 import           TXG.Simulate.Utils
+import           TXG.Utils
 
 ---
 
@@ -40,7 +39,7 @@ helloWorldContractLoader
     -> IO (Command Text)
 helloWorldContractLoader v meta adminKS = do
   let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
-  mkExec (T.unpack theCode) theData meta (NEL.toList adminKS) (Just $ NetworkId $ toText v) Nothing
+  mkExec (T.unpack theCode) theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = [text|
 (module helloWorld 'admin-keyset
@@ -57,7 +56,7 @@ instance Fake Name where
   fake = Name <$> personName
 
 helloRequest :: ChainwebVersion -> Name -> IO (Command Text)
-helloRequest v (Name name) = mkExec theCode theData def [] (Just $ NetworkId $ toText v) Nothing
+helloRequest v (Name name) = mkExec theCode theData def [] (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theData = Null
     theCode = printf "(helloWorld.hello \"%s\")" name

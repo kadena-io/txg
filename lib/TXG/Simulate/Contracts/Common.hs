@@ -1,6 +1,8 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DerivingStrategies         #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeApplications           #-}
 
@@ -14,6 +16,10 @@ module TXG.Simulate.Contracts.Common
   , ContractName(..)
   , makeMeta
   , makeMetaWithSender
+  , ChainId(..)
+  , cidToText
+  , cidFromText
+  , chainIds
     -- * Accounts
   , accountNames
   , coinAccountNames
@@ -34,10 +40,6 @@ module TXG.Simulate.Contracts.Common
   ) where
 
 import           BasePrelude
-import           Chainweb.ChainId
-import           Chainweb.Time
-import           Chainweb.Utils
-import           Chainweb.Version
 import           Control.Lens hiding (elements, uncons, (.=))
 import           Control.Monad.Catch
 import           Data.Aeson
@@ -47,8 +49,6 @@ import qualified Data.ByteString.Char8 as B8
 import           Data.Decimal
 import           Data.FileEmbed
 import qualified Data.HashMap.Strict as HM
-import           Data.List (uncons)
-import           Data.List.NonEmpty (NonEmpty)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -56,13 +56,13 @@ import           Data.Text.Encoding
 import qualified Data.Yaml as Y
 import           Fake
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
-import           Pact.Parse
 import qualified Pact.Types.ChainId as CM
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           Pact.Types.Crypto
 import           Pact.Types.Gas
 import           TXG.Simulate.Utils
+import           TXG.Utils
 
 ---
 
@@ -77,7 +77,7 @@ createPaymentsAccount v meta name = do
     let theData = object
           [ T.pack (name ++ "-keyset") .= fmap (formatB16PubKey . fst) nameKeyset
           ]
-    res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ toText v) Nothing
+    res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (NEL.fromList nameKeyset, res)
   where
     theCode = printf "(payments.create-account \"%s\" %s (read-keyset \"%s-keyset\"))" name (show (1000000.1 :: Decimal)) name
@@ -91,7 +91,7 @@ createCoinAccount v meta name = do
     adminKS <- testSomeKeyPairs
     nameKeyset <- NEL.fromList <$> getKeyset
     let theData = object [T.pack (name ++ "-keyset") .= fmap (formatB16PubKey . fst) nameKeyset]
-    res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ toText v) Nothing
+    res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (nameKeyset, res)
   where
     theCode = printf "(coin.create-account \"%s\" (read-keyset \"%s\"))" name name
@@ -173,10 +173,10 @@ distinctPairSenders = fakeInt 0 9 >>= go
 -- hardcoded sender (sender00)
 makeMeta :: ChainId -> CM.TTLSeconds -> GasPrice -> GasLimit -> IO CM.PublicMeta
 makeMeta cid ttl gasPrice gasLimit = do
-    t <- toTxCreationTime <$> getCurrentTimeIntegral
+    t <- currentTxTime
     return $ CM.PublicMeta
         {
-          CM._pmChainId = CM.ChainId $ toText cid
+          CM._pmChainId = CM.ChainId $ cidToText cid
         , CM._pmSender = "sender00"
         , CM._pmGasLimit = gasLimit
         , CM._pmGasPrice = gasPrice
@@ -208,9 +208,6 @@ instance FromJSON ContractName
 parseBytes :: MonadThrow m => Text -> Parser a -> B8.ByteString -> m a
 parseBytes name parser b = either (throwM . TextFormatException . msg) pure $ parseOnly (parser <* endOfInput) b
   where
-    msg e = "Failed to parse " <> sshow b <> " as " <> name <> ": "
+    msg e = "Failed to parse " <> T.pack (show b) <> " as " <> name <> ": "
         <> T.pack e
 
-toTxCreationTime :: Time Integer -> CM.TxCreationTime
-toTxCreationTime (Time timespan) = case timeSpanToSeconds timespan of
-    Seconds s  -> CM.TxCreationTime $ ParsedInteger s

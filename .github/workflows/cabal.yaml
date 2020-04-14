@@ -1,0 +1,148 @@
+name: Build and publish application binaries
+
+on:
+  pull_request:
+  push:
+
+jobs:
+
+  build:
+    name: Build master with ${{ matrix.ghc }} / ${{ matrix.cabal }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ['8.6.5', '8.8.3', '8.10.1']
+        cabal: ['3.0']
+        os: ['ubuntu-18.04']
+        cabalcache: ['true']
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.kadena_cabal_cache_aws_access_key_id }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.kadena_cabal_cache_aws_secret_access_key }}
+
+      # Cabal Cache
+      CABAL_CACHE: ./tmp/bin/cabal-cache
+      CABAL_CACHE_BUCKET: kadena-cabal-cache
+      SYNC_TO_CACHE: $CABAL_CACHE sync-to-archive --threads 16 --archive-uri s3://$CABAL_CACHE_BUCKET/${{ matrix.os }} --region us-east-1
+      SYNC_FROM_CACHE: $CABAL_CACHE sync-from-archive --threads 16 --archive-uri s3://$CABAL_CACHE_BUCKET/${{ matrix.os }} --region us-east-1
+
+      # Aritfacts
+      ARTIFACT_BUCKET: kadena-cabal-cache
+      ARTIFACT_FOLDER: txg
+
+    steps:
+    # Setup
+    - name: Checkout repository
+      uses: actions/checkout@v1
+    - name: Install cabal-cache
+      if: matrix.cabalcache == 'true'
+      run: |
+        [[ "${{ matrix.os }}" =~ ubuntu ]] && OS="linux" || OS="osx"
+        mkdir -p "./tmp/bin"
+        curl -Ls "https://github.com/haskell-works/cabal-cache/releases/download/v1.0.1.5/cabal-cache_x86_64_${OS}.tar.gz" | tar -xzC "./tmp/bin/"
+    - name: Install Haskell (macOS)
+      if: contains(matrix.os, 'macOS')
+      run: |
+        curl -sL https://haskell.futurice.com/haskell-on-macos.py | python3 - --make-dirs --paths.d --ghc-alias=${{ matrix.ghc }} --cabal-alias=3.0.0.0 install ghc-${{ matrix.ghc }} cabal-install-3.0.0.0
+        ln -s /opt/cabal/3.0.0.0 /opt/cabal/3.0
+    - name: Install Haskell (ubuntu)
+      if: contains(matrix.os, 'ubuntu')
+      run: |
+          sudo add-apt-repository ppa:hvr/ghc
+          sudo apt-get update
+          sudo apt-get install ghc-${{ matrix.ghc }}
+    - name: Set GHC and Cabal version
+      uses: actions/setup-haskell@v1
+      with:
+         ghc-version: ${{ matrix.ghc }}
+         cabal-version: ${{ matrix.cabal }}
+    - name: Install non-Haskell dependencies (ubuntu)
+      if: contains(matrix.os, 'ubuntu')
+      run: |
+          sudo apt-get update
+          sudo apt-get install -y git zlib1g-dev libtinfo-dev libsqlite3-dev libz3-dev
+    - name: Install non-Haskell dependencies (macOS)
+      if: contains(matrix.os, 'mac')
+      run: |
+        brew update
+        brew install z3
+        brew install sqlite
+    - name: Append cabal.project
+      run: |
+        cat >> cabal.project <<EOF
+        documentation: false
+        executable-stripping: True
+        library-stripping: True
+        EOF
+    - name: Append cabal.project for GHC-8.10
+      if: contains(matrix.ghc, '8.10')
+      run : |
+        cat >> cabal.project <<EOF
+        package pact
+          ghc-options: -Wwarn
+        package txg
+          ghc-options: -Wwarn
+        package cassava
+            flags: -bytestring--LT-0_10_4
+        allow-newer:
+          *:*
+        constraints:
+          megaparsec <8
+        source-repository-package
+          type: git
+          location: https://github.com/well-typed/optics
+          tag: 95760a121023b6314a1b1a92939fc97613ec5645
+          subdir: optics-core
+    - uses: actions/cache@v1
+      name: Cache dist-newstyle
+      with:
+        path: dist-newstyle
+        key: ${{ matrix.os }}-${{ matrix.ghc }}-dist-newstyle-${{ github.sha }}
+        restore-keys: |
+          ${{ matrix.os }}-${{ matrix.ghc }}-dist-newstyle-
+          ${{ matrix.os }}-${{ matrix.ghc }}-dist-newstyle
+
+    # Build
+    - name: Update package database
+      run: cabal v2-update
+    - name: Configure build
+      run: 'grep -q "ghc-${{ matrix.ghc }}" dist-newstyle/cache/plan.json || cabal v2-configure'
+    - name: Sync from cabal cache
+      if: matrix.cabalcache == 'true'
+      run: eval $SYNC_FROM_CACHE
+    - name: Install build dependencies
+      run: cabal v2-build --only-dependencies
+    - name: Build
+      run: cabal v2-build
+    - name: Run Tests
+      run: cabal v2-test
+    - name: Sync cabal cache
+      if: always() && (matrix.cabalcache == 'true')
+      run: eval $SYNC_TO_CACHE
+
+    # Publish Artifacts
+    - name: Prepare artifacts
+      run: |
+        mkdir -p artifacts/applications
+        export VER=$(grep '^version' txg.cabal | sed -e 's/.*: *//')
+        cp dist-newstyle/build/*/ghc-${{ matrix.ghc }}/txg-${VER}/x/txg/build/txg/txg artifacts/applications
+    - name: Publish applications
+      uses: actions/upload-artifact@v1
+      with:
+        name: txg.${{ matrix.ghc }}.${{ matrix.os }}
+        path: artifacts/applications
+
+    # Publish to S3
+    - name: Publish applications to S3
+      run: |
+        export BINFILE="txg.${{ matrix.ghc }}.${{ matrix.os }}.$(git rev-parse --short HEAD).tar.gz"
+        tar -C ./artifacts/applications/ -czf $BINFILE txg
+        aws s3 cp $BINFILE s3://$ARTIFACT_BUCKET/$ARTIFACT_FOLDER/
+        aws s3api put-object-acl --bucket $ARTIFACT_BUCKET --key=$ARTIFACT_FOLDER/$BINFILE --acl public-read
+    - name: Link latest-build application in S3
+      if: contains(github.ref, 'master')
+      run: |
+        export BINFILE="txg.${{ matrix.ghc }}.${{ matrix.os }}.$(git rev-parse --short HEAD).tar.gz"
+        export LATEST_BINFILE="txg.${{ matrix.ghc }}.${{ matrix.os }}.latest.tar.gz"
+        aws s3 cp s3://$ARTIFACT_BUCKET/$ARTIFACT_FOLDER/$BINFILE s3://$ARTIFACT_BUCKET/$ARTIFACT_FOLDER/$LATEST_BINFILE
+        aws s3api put-object-acl --bucket $ARTIFACT_BUCKET --key=$ARTIFACT_FOLDER/$LATEST_BINFILE --acl public-read

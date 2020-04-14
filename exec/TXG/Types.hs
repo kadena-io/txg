@@ -1,9 +1,12 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE DeriveAnyClass             #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DerivingStrategies         #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications           #-}
 
 -- | Module: TXG.Types
@@ -17,6 +20,9 @@
 module TXG.Types
   ( -- * TXCmd
     TXCmd(..)
+  , transactionCommandBytes
+  , transactionCommandToText
+  , transactionCommandFromText
   , SingleTX(..)
     -- * Timing
   , TimingDistribution(..)
@@ -29,6 +35,10 @@ module TXG.Types
   , TXG(..)
   , TXGState(..)
   , TXGConfig(..), mkTXGConfig
+    -- * Pact API
+  , pactPost
+  , ClientError(..)
+  , unsafeManager
     -- * Misc.
   , TXCount(..)
   , BatchSize(..)
@@ -38,13 +48,7 @@ module TXG.Types
   ) where
 
 import           BasePrelude hiding (loop, option, rotate, timeout, (%))
-import           Chainweb.ChainId
-import           Chainweb.HostAddress
-import           Chainweb.Mempool.Mempool (TransactionHash)
-import           Chainweb.Utils
-    (HasTextRepresentation(..), fromJuste, textOption)
-import           Chainweb.Version
-import           Configuration.Utils hiding (Error, Lens', (<.>))
+import           Configuration.Utils hiding (Error, Lens')
 import           Control.Monad.Catch (MonadThrow(..))
 import           Control.Monad.Primitive
 import           Control.Monad.Reader hiding (local)
@@ -58,21 +62,16 @@ import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
-import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
-import           Network.HTTP.Client hiding (Proxy, host)
-import           Network.HTTP.Client.TLS
-import           Network.X509.SelfSigned hiding (name)
+import           Network.HostAddress
+import           Network.HTTP.Client hiding (Proxy)
 import           Pact.Parse
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Gas
-import           Servant.Client
 import           System.Random.MWC (Gen)
 import qualified TXG.Simulate.Contracts.Common as Sim
-import qualified Utils.Logging.Config as U
-
----
+import           TXG.Utils
 
 newtype Verbose = Verbose { verbosity :: Bool }
   deriving (Eq, Show, Generic, Read)
@@ -151,12 +150,6 @@ listenkeys = do
   bs <- parseRequestKey
   pure $ ListenerRequestKey $ T.decodeUtf8 bs
 
-instance HasTextRepresentation TXCmd where
-  toText = transactionCommandToText
-  {-# INLINE toText #-}
-  fromText = transactionCommandFromText
-  {-# INLINE fromText #-}
-
 -------
 -- Args
 -------
@@ -167,7 +160,6 @@ data Args = Args
   , isChainweb      :: !Bool
   , hostAddresses   :: ![HostAddress]
   , nodeVersion     :: !ChainwebVersion
-  , logHandleConfig :: !U.HandleConfig
   , batchSize       :: !BatchSize
   , verbose         :: !Verbose
   , gasLimit        :: GasLimit
@@ -182,7 +174,6 @@ instance ToJSON Args where
     , "isChainweb"      .= isChainweb o
     , "hostAddresses"   .= hostAddresses o
     , "chainwebVersion" .= nodeVersion o
-    , "logHandle"       .= logHandleConfig o
     , "batchSize"       .= batchSize o
     , "verbose"         .= verbose o
     , "gasLimit"        .= gasLimit o
@@ -197,7 +188,6 @@ instance FromJSON (Args -> Args) where
     <*< field @"isChainweb"      ..: "isChainweb"      % o
     <*< field @"hostAddresses"   ..: "hostAddresses"   % o
     <*< field @"nodeVersion"     ..: "chainwebVersion" % o
-    <*< field @"logHandleConfig" ..: "logging"         % o
     <*< field @"batchSize"       ..: "batchSize"       % o
     <*< field @"verbose"         ..: "verbose"         % o
     <*< field @"gasLimit"        ..: "gasLimit"        % o
@@ -211,7 +201,6 @@ defaultArgs = Args
   , isChainweb      = True
   , hostAddresses   = []
   , nodeVersion     = v
-  , logHandleConfig = U.StdOut
   , batchSize       = BatchSize 1
   , verbose         = Verbose False
   , gasLimit = Sim.defGasLimit
@@ -220,11 +209,11 @@ defaultArgs = Args
   }
   where
     v :: ChainwebVersion
-    v = fromJuste $ chainwebVersionFromText "timedCPM-peterson"
+    v = Development
 
 scriptConfigParser :: MParser Args
 scriptConfigParser = id
-  <$< field @"scriptCommand" .:: textOption
+  <$< field @"scriptCommand" .:: textOption transactionCommandFromText
       % long "script-command"
       <> short 'c'
       <> metavar "COMMAND"
@@ -232,7 +221,7 @@ scriptConfigParser = id
                <> "The only commands supported on the commandline are 'poll' and 'listen'.")
   <*< field @"nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
   <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
-  <*< field @"nodeVersion" .:: textOption
+  <*< field @"nodeVersion" .:: textOption chainwebVersionFromText
       % long "chainweb-version"
       <> short 'v'
       <> metavar "VERSION"
@@ -267,7 +256,7 @@ scriptConfigParser = id
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
-    pChainId = textOption
+    pChainId = textOption cidFromText
       % long "node-chain-id"
       <> short 'i'
       <> metavar "INT"
@@ -298,7 +287,8 @@ data TXGState = TXGState
 data TXGConfig = TXGConfig
   { confTimingDist :: !(Maybe TimingDistribution)
   , confKeysets :: !(Map ChainId (Map Sim.Account (Map Sim.ContractName (NonEmpty SomeKeyPairCaps))))
-  , confClientEnv :: !ClientEnv
+  , confHost :: !HostAddress
+  , confManager :: !Manager
   , confVersion :: !ChainwebVersion
   , confBatchSize :: !BatchSize
   , confVerbose :: !Verbose
@@ -308,30 +298,19 @@ data TXGConfig = TXGConfig
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
-mkTXGConfig mdistribution config host =
+mkTXGConfig mdistribution config hostAddr =
   TXGConfig mdistribution mempty
-  <$> cenv
+  <$> pure hostAddr
+  <*> unsafeManager
   <*> pure (nodeVersion config)
   <*> pure (batchSize config)
   <*> pure (verbose config)
   <*> pure (gasLimit config)
   <*> pure (gasPrice config)
   <*> pure (timetolive config)
-  where
-    cenv :: IO ClientEnv
-    cenv = do
-       mgrSettings <- certificateCacheManagerSettings TlsInsecure Nothing
-       let timeout = responseTimeoutMicro $ 1000000 * 60 * 4
-       mgr <- newTlsManagerWith $ mgrSettings { managerResponseTimeout = timeout }
-       let url = BaseUrl Https
-                 (T.unpack . hostnameToText $ _hostAddressHost host)
-                 (fromIntegral $ _hostAddressPort host)
-                 ""
-       pure $! mkClientEnv mgr url
 
--------
+-- -------------------------------------------------------------------------- --
 -- MISC
--------
 
 -- | A running count of all transactions handles over all threads.
 newtype TXCount = TXCount Word
