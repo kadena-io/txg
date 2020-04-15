@@ -30,4 +30,4 @@ jobs:
             ${{ runner.os }}-lts15-
 
       - name: Build
-        run: "stack build --fast --no-terminal"
+        run: "stack build --fast --no-terminal --system-ghc"
