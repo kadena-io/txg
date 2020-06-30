@@ -1,7 +1,6 @@
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DerivingStrategies         #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeApplications           #-}
@@ -39,28 +38,32 @@ module TXG.Simulate.Contracts.Common
   , defTTL
   ) where
 
-import           BasePrelude
 import           Control.Lens hiding (elements, uncons, (.=))
 import           Control.Monad.Catch
 import           Data.Aeson
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
+import           Data.Char
 import           Data.Decimal
 import           Data.FileEmbed
 import qualified Data.HashMap.Strict as HM
+import qualified Data.List as L
 import qualified Data.List.NonEmpty as NEL
+import           Data.Maybe
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Text.Encoding
 import qualified Data.Yaml as Y
 import           Fake
+import           GHC.Generics
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
 import qualified Pact.Types.ChainId as CM
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           Pact.Types.Crypto
 import           Pact.Types.Gas
+import           Text.Printf
 import           TXG.Simulate.Utils
 import           TXG.Utils
 
@@ -70,7 +73,7 @@ createPaymentsAccount
     :: ChainwebVersion
     -> CM.PublicMeta
     -> String
-    -> IO (NonEmpty SomeKeyPairCaps, Command Text)
+    -> IO (NEL.NonEmpty SomeKeyPairCaps, Command Text)
 createPaymentsAccount v meta name = do
     adminKS <- testSomeKeyPairs
     nameKeyset <- (\k -> [(k, [])]) <$> genKeyPair defaultScheme
@@ -86,7 +89,7 @@ createCoinAccount
     :: ChainwebVersion
     -> CM.PublicMeta
     -> String
-    -> IO (NonEmpty SomeKeyPairCaps, Command Text)
+    -> IO (NEL.NonEmpty SomeKeyPairCaps, Command Text)
 createCoinAccount v meta name = do
     adminKS <- testSomeKeyPairs
     nameKeyset <- NEL.fromList <$> getKeyset
@@ -104,10 +107,10 @@ createCoinAccount v meta name = do
           mkKeyPairs [keypair]
       | otherwise = (\k -> [(k, [])]) <$> genKeyPair defaultScheme
 
-createPaymentsAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NonEmpty (NonEmpty SomeKeyPairCaps, Command Text))
+createPaymentsAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps, Command Text))
 createPaymentsAccounts v meta = traverse (createPaymentsAccount v meta) names
 
-createCoinAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NonEmpty (NonEmpty SomeKeyPairCaps, Command Text))
+createCoinAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps, Command Text))
 createCoinAccounts v meta = traverse (createCoinAccount v meta) names
 
 coinAccountNames :: [Account]
@@ -127,14 +130,14 @@ stockKey s = do
   return $ ApiKeyPair (PrivBS $ mkKeyBS priv) (Just $ PubBS $ mkKeyBS pub) Nothing (Just ED25519) Nothing
 
 safeCapitalize :: String -> String
-safeCapitalize = fromMaybe [] . fmap (uncurry (:) . bimap toUpper (map toLower)) . uncons
+safeCapitalize = fromMaybe [] . fmap (uncurry (:) . bimap toUpper (map toLower)) . L.uncons
 
-names :: NonEmpty String
+names :: NEL.NonEmpty String
 names = NEL.map safeCapitalize . NEL.fromList $ words "mary elizabeth patricia jennifer linda barbara margaret susan dorothy jessica james john robert michael william david richard joseph charles thomas"
 
 newtype Account = Account { getAccount :: String } deriving (Eq, Ord, Show, Generic)
 
-accountNames :: NonEmpty Account
+accountNames :: NEL.NonEmpty Account
 accountNames = NEL.map Account names
 
 instance Fake Account where

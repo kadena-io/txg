@@ -3,7 +3,6 @@
 -- in ghci.  Do not depend on this module from important code!
 
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE DataKinds           #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -53,7 +52,6 @@ module TXG.Repl
   , module TXG.Simulate.Contracts.CoinContract
   ) where
 
-import           BasePrelude
 import           Control.Exception
 import           Control.Lens hiding (from, to, (.=))
 import           Control.Monad (forM)
@@ -65,7 +63,6 @@ import           Data.ByteString.Random
 import           Data.Decimal
 import           Data.Foldable
 import           Data.HashSet ()
-import           Data.List.NonEmpty (NonEmpty(..))
 import qualified Data.List.NonEmpty as NEL
 import           Data.Maybe
 import           Data.Ratio
@@ -101,7 +98,7 @@ import           TXG.Utils
 
 -- Helper for simplifying construction of RequestKeys
 rk :: String -> RequestKeys
-rk s = RequestKeys $ fromString s :| []
+rk s = RequestKeys $ fromString s NEL.:| []
 
 host :: String -> HostAddress
 host h = HostAddress hn 443
@@ -230,7 +227,7 @@ pollResponse nw (Right rks) = do
 
 listenResponse :: Network -> Either ClientError RequestKeys -> IO ()
 listenResponse _nw (Left err) = putStrLn $ "There was a failure in the send: " ++ show err
-listenResponse nw (Right (RequestKeys (k :| []))) = do
+listenResponse nw (Right (RequestKeys (k NEL.:| []))) = do
   listResp <- pactListen nw k
   case listResp of
     Left err         -> putStrLn $ "Listen error: " ++ show err

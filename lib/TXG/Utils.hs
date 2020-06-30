@@ -2,7 +2,6 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -56,20 +55,22 @@ module TXG.Utils
 , mempoolMember
 ) where
 
-import BasePrelude hiding (option)
-
 import Configuration.Utils
 
 import Control.Monad.Catch
 
+import Data.Bifunctor
 import qualified Data.ByteString as B
 import Data.ByteString.Base64.URL
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.List.NonEmpty as NEL
+import Data.Maybe
+import Data.String
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import Data.Time.Clock.POSIX
 
+import GHC.Generics
 import GHC.Stack
 
 import Network.Connection
@@ -85,6 +86,8 @@ import Pact.Types.API
 import qualified Pact.Types.ChainMeta as CM
 import Pact.Types.Command
 import Pact.Types.Hash
+
+import Text.Read (readEither)
 
 -- -------------------------------------------------------------------------- --
 -- Chainweb Version

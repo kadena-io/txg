@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveGeneric    #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes      #-}
 {-# LANGUAGE TypeApplications #-}
@@ -7,7 +6,6 @@
 -- |
 module TXG.Simulate.Contracts.SimplePayments where
 
-import           BasePrelude
 import           Data.Aeson
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.Strict as M
@@ -20,13 +18,14 @@ import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           System.Random
+import           Text.Printf
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Utils
 import           TXG.Utils
 
 ---
 
-simplePaymentsContractLoader :: ChainwebVersion -> PublicMeta -> NonEmpty SomeKeyPairCaps -> IO (Command Text)
+simplePaymentsContractLoader :: ChainwebVersion -> PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
 simplePaymentsContractLoader v meta adminKS = do
     let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
     mkExec (T.unpack theCode) theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
@@ -83,7 +82,7 @@ simplePaymentsContractLoader v meta adminKS = do
   |]
 
 mkRandomSimplePaymentRequest
-  :: M.Map Account (NonEmpty SomeKeyPairCaps)
+  :: M.Map Account (NEL.NonEmpty SomeKeyPairCaps)
   -> IO (FGen SimplePaymentRequest)
 mkRandomSimplePaymentRequest _ = do
   request <- randomRIO @Int (0, 1)
@@ -109,13 +108,13 @@ mkRandomSimplePaymentRequest _ = do
 data SimplePaymentRequest
   = SPRequestGetBalance Account
   | SPRequestPay Account Account Amount
-  | SPCreateAccount Account Balance (NonEmpty SomeKeyPairCaps)
+  | SPCreateAccount Account Balance (NEL.NonEmpty SomeKeyPairCaps)
 
 simplePayReq
   :: ChainwebVersion
   -> PublicMeta
   -> SimplePaymentRequest
-  -> Maybe (NonEmpty SomeKeyPairCaps)
+  -> Maybe (NEL.NonEmpty SomeKeyPairCaps)
   -> IO (Command Text)
 simplePayReq v meta (SPCreateAccount (Account account) (Balance initBal) ks) _ = do
   adminKS <- testSomeKeyPairs

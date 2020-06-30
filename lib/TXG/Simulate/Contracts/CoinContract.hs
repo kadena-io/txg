@@ -1,12 +1,11 @@
 {-# LANGUAGE DeriveGeneric    #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications #-}
 
 module TXG.Simulate.Contracts.CoinContract where
 
-import           BasePrelude
 import           Data.Aeson
+import           Data.Bool
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.Strict as M
 import           Data.Text (Text)
@@ -16,6 +15,7 @@ import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           System.Random
+import           Text.Printf
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Utils
 import           TXG.Utils
@@ -29,7 +29,7 @@ data CoinContractRequest
   | CoinTransferAndCreate SenderName ReceiverName Guard Amount
   deriving Show
 
-newtype Guard = Guard (NonEmpty SomeKeyPairCaps)
+newtype Guard = Guard (NEL.NonEmpty SomeKeyPairCaps)
 newtype SenderName = SenderName Account
 newtype ReceiverName = ReceiverName Account
 
@@ -45,7 +45,7 @@ instance Show ReceiverName where
 
 mkRandomCoinContractRequest
     :: Bool
-    -> M.Map Account (NonEmpty SomeKeyPairCaps)
+    -> M.Map Account (NEL.NonEmpty SomeKeyPairCaps)
     -> IO (FGen CoinContractRequest)
 mkRandomCoinContractRequest transfersPred kacts = do
     request <- bool (randomRIO @Int (0, 1)) (return 1) transfersPred
