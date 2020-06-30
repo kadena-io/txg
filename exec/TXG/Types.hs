@@ -5,7 +5,6 @@
 {-# LANGUAGE DerivingStrategies         #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeApplications           #-}
 
@@ -47,13 +46,14 @@ module TXG.Types
   , nelZipWith3
   ) where
 
-import           BasePrelude hiding (loop, option, rotate, timeout, (%))
 import           Configuration.Utils hiding (Error, Lens')
+import           Control.Concurrent.STM
 import           Control.Monad.Catch (MonadThrow(..))
 import           Control.Monad.Primitive
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import qualified Data.Attoparsec.ByteString.Char8 as A
+import           Data.Bifunctor
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import           Data.Decimal
@@ -63,6 +63,7 @@ import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
 import qualified Data.Text.Encoding as T
+import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
 import           Pact.Parse
@@ -70,6 +71,7 @@ import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
+import           Text.Read (readEither)
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Utils
 
@@ -285,7 +287,7 @@ data TXGState = TXGState
 
 data TXGConfig = TXGConfig
   { confTimingDist :: !(Maybe TimingDistribution)
-  , confKeysets :: !(Map ChainId (Map Sim.Account (Map Sim.ContractName (NonEmpty SomeKeyPairCaps))))
+  , confKeysets :: !(Map ChainId (Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))))
   , confHost :: !HostAddress
   , confManager :: !Manager
   , confVersion :: !ChainwebVersion
@@ -318,12 +320,12 @@ newtype TXCount = TXCount Word
 newtype BatchSize = BatchSize Word
   deriving newtype (Integral, Real, Num, Enum, Ord, Eq, Read, Show, ToJSON, FromJSON)
 
-nelReplicate :: Word -> a -> NonEmpty a
+nelReplicate :: Word -> a -> NEL.NonEmpty a
 nelReplicate n a = NEL.unfoldr f n
   where
     f 0 = error "nelReplicate: Can't have length-0 list."
     f 1 = (a, Nothing)
     f m = (a, Just $ m - 1)
 
-nelZipWith3 :: (a -> b -> c -> d) -> NonEmpty a -> NonEmpty b -> NonEmpty c -> NonEmpty d
-nelZipWith3 f ~(x :| xs) ~(y :| ys) ~(z :| zs) = f x y z :| zipWith3 f xs ys zs
+nelZipWith3 :: (a -> b -> c -> d) -> NEL.NonEmpty a -> NEL.NonEmpty b -> NEL.NonEmpty c -> NEL.NonEmpty d
+nelZipWith3 f ~(x NEL.:| xs) ~(y NEL.:| ys) ~(z NEL.:| zs) = f x y z NEL.:| zipWith3 f xs ys zs

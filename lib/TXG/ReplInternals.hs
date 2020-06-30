@@ -1,6 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -8,7 +7,6 @@
 
 module TXG.ReplInternals where
 
-import           BasePrelude
 import           Control.Lens hiding ((.=))
 import           Control.Monad.State
 import           Data.Aeson
@@ -26,6 +24,7 @@ import           Pact.Types.ChainMeta
 import           Pact.Types.Command
 import           Pact.Types.Hash
 import           System.Random
+import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
 import           TXG.Simulate.Contracts.Common
 import           TXG.Simulate.Contracts.HelloWorld

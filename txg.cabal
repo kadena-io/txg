@@ -15,9 +15,6 @@ extra-source-files:
 
 common commons
   default-language:   Haskell2010
-  default-extensions:
-    NoImplicitPrelude
-    OverloadedStrings
 
   ghc-options:
     -Wall
@@ -34,7 +31,6 @@ common commons
     , base                  >=4.7  && <5
     , base16-bytestring     >=0.1
     , base64                >=0.4
-    , base-prelude          >=1.3
     , bytestring
     , configuration-tools   >=0.4
     , connection            >=0.3

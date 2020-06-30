@@ -1,5 +1,4 @@
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes   #-}
 
@@ -14,19 +13,20 @@
 
 module TXG.Simulate.Contracts.HelloWorld where
 
-import           BasePrelude
 import           Data.Aeson
 import           Data.Default
 import qualified Data.List.NonEmpty as NEL
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Fake
+import           GHC.Generics
 import           Fake.Provider.Person.EN_US
 import           NeatInterpolation
 import           Pact.ApiReq (mkExec)
 import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
+import           Text.Printf
 import           TXG.Simulate.Utils
 import           TXG.Utils
 
@@ -35,7 +35,7 @@ import           TXG.Utils
 helloWorldContractLoader
     :: ChainwebVersion
     -> PublicMeta
-    -> NonEmpty SomeKeyPairCaps
+    -> NEL.NonEmpty SomeKeyPairCaps
     -> IO (Command Text)
 helloWorldContractLoader v meta adminKS = do
   let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]

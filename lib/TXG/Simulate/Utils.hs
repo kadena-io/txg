@@ -1,9 +1,8 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module TXG.Simulate.Utils where
 
-import           BasePrelude
+import           Control.Monad.IO.Class
 import           Data.Aeson
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Base16 as B16
@@ -22,13 +21,13 @@ import           TXG.Utils
 
 ---
 
-testApiKeyPairs :: NonEmpty ApiKeyPair
+testApiKeyPairs :: NEL.NonEmpty ApiKeyPair
 testApiKeyPairs =
   let (pub, priv, addr, scheme) = someED25519Pair
       apiKP = ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing
    in pure apiKP
 
-testSomeKeyPairs :: IO (NonEmpty SomeKeyPairCaps)
+testSomeKeyPairs :: IO (NEL.NonEmpty SomeKeyPairCaps)
 testSomeKeyPairs = do
     let (pub, priv, addr, scheme) = someED25519Pair
         apiKP = ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing
@@ -64,7 +63,7 @@ decodeKey = fst . B16.decode
 initAdminKeysetContract
     :: ChainwebVersion
     -> PublicMeta
-    -> NonEmpty SomeKeyPairCaps
+    -> NEL.NonEmpty SomeKeyPairCaps
     -> IO (Command Text)
 initAdminKeysetContract v meta adminKS =
   mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing

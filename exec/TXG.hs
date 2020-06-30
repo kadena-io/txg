@@ -3,7 +3,6 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -24,18 +23,21 @@
 
 module Main ( main ) where
 
-import           BasePrelude hiding (loop, rotate, timeout, (%))
 import           Configuration.Utils hiding (Error, Lens')
-import           Control.Concurrent.Async (forConcurrently_)
-import           Control.Concurrent.STM.TVar (modifyTVar')
+import           Control.Concurrent
+import           Control.Concurrent.Async hiding (poll)
+import           Control.Concurrent.STM
 import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Data.Generics.Product.Fields (field)
+import           Data.Foldable
+import           Data.Functor.Compose
 import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import qualified Data.Map as M
+import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
 import           Data.Text (Text)
@@ -57,10 +59,12 @@ import           Pact.Types.Names
 import           Pact.Types.PactValue
 import           System.Logger hiding (StdOut)
 import qualified System.Logger as Y
+import           System.Exit
 import           System.Random
 import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
 import           Text.Pretty.Simple (pPrintNoColor)
+import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Simulate.Contracts.HelloWorld
@@ -82,7 +86,7 @@ generateDelay = do
 
 generateSimpleTransactions
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG m (Sim.ChainId, NonEmpty (Maybe Text), NonEmpty (Command Text))
+  => TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
 generateSimpleTransactions = do
   -- Choose a Chain to send these transactions to, and cycle the state.
   cid <- NES.head <$> gets gsChains
@@ -143,7 +147,7 @@ generateTransactions
     => Bool
     -> Verbose
     -> CmdChoice
-    -> TXG m (Sim.ChainId, NonEmpty (Maybe Text) , NonEmpty (Command Text))
+    -> TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
 generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
   -- Choose a Chain to send this transaction to, and cycle the state.
   cid <- NES.head <$> gets gsChains
@@ -177,7 +181,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         -> Bool
         -> Verbose
         -> Sim.ChainId
-        -> Map Sim.Account (NonEmpty SomeKeyPairCaps)
+        -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
         -> IO (Maybe Text, Command Text)
     coinContract gl gp ttl version transfers (Verbose vb) cid coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest transfers coinaccts >>= generate
@@ -197,7 +201,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
       meta <- Sim.makeMetaWithSender sender ttl gp gl cid
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
-    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NonEmpty SomeKeyPairCaps) -> (Sim.Account, NonEmpty SomeKeyPairCaps)
+    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
     mkTransferCaps (ReceiverName (Sim.Account r)) (Sim.Amount m) (s@(Sim.Account ss),ks) = (s, (caps <$) <$> ks)
       where caps = [gas,tfr]
             gas = SigCapability (QualifiedName "coin" "GAS" (mkInfo "coin.GAS")) []
@@ -206,7 +210,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                   , PLiteral $ LString $ T.pack r
                   , PLiteral $ LDecimal m]
 
-    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NonEmpty SomeKeyPairCaps) -> IO (Command Text)
+    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
     payments gl gp ttl v cid paymentAccts = do
       paymentsRequest <- mkRandomSimplePaymentRequest paymentAccts >>= generate
       case paymentsRequest of
@@ -224,7 +228,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
 pactSend
   :: TXGConfig
   -> Sim.ChainId
-  -> NonEmpty (Command Text)
+  -> NEL.NonEmpty (Command Text)
   -> IO (Either ClientError RequestKeys)
 pactSend c cid cmds = send
   (confManager c)
@@ -268,7 +272,7 @@ isMempoolMember c cid = mempoolMember
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG m (Sim.ChainId, NonEmpty (Maybe Text), NonEmpty (Command Text))
+  => TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG m ()
 loop f = do
   (cid, msgs, transactions) <- f
@@ -291,9 +295,9 @@ loop f = do
   loop f
 
 type ContractLoader
-    = CM.PublicMeta -> NonEmpty SomeKeyPairCaps -> IO (Command Text)
+    = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
 
-loadContracts :: Args -> HostAddress -> NonEmpty ContractLoader -> IO ()
+loadContracts :: Args -> HostAddress -> NEL.NonEmpty ContractLoader -> IO ()
 loadContracts config host contractLoaders = do
   conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl') <- mkTXGConfig Nothing config host
   forM_ (nodeChainIds config) $ \cid -> do
@@ -346,17 +350,17 @@ realTransactions config host tv distribution = do
   evalStateT (runReaderT (runTXG act) env) stt
   where
     buildGenAccountsKeysets
-      :: NonEmpty Sim.Account
-      -> NonEmpty (NonEmpty SomeKeyPairCaps)
-      -> NonEmpty (NonEmpty SomeKeyPairCaps)
-      -> Map Sim.Account (Map Sim.ContractName (NonEmpty SomeKeyPairCaps))
+      :: NEL.NonEmpty Sim.Account
+      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
+      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
     buildGenAccountsKeysets accs pks cks =
       M.fromList . NEL.toList $ nelZipWith3 go accs pks cks
 
     go :: Sim.Account
-       -> NonEmpty SomeKeyPairCaps
-       -> NonEmpty SomeKeyPairCaps
-       -> (Sim.Account, Map Sim.ContractName (NonEmpty SomeKeyPairCaps))
+       -> NEL.NonEmpty SomeKeyPairCaps
+       -> NEL.NonEmpty SomeKeyPairCaps
+       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
     go name pks cks = (name, M.fromList [ps, cs])
       where
         ps = (Sim.ContractName "payment", pks)
@@ -395,15 +399,15 @@ realCoinTransactions config host tv distribution = do
   evalStateT (runReaderT (runTXG act) env) stt
   where
     buildGenAccountsKeysets
-      :: NonEmpty Sim.Account
-      -> NonEmpty (NonEmpty SomeKeyPairCaps)
-      -> Map Sim.Account (Map Sim.ContractName (NonEmpty SomeKeyPairCaps))
+      :: NEL.NonEmpty Sim.Account
+      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
     buildGenAccountsKeysets accs cks =
       M.fromList . NEL.toList $ NEL.zipWith go accs cks
 
     go :: Sim.Account
-       -> NonEmpty SomeKeyPairCaps
-       -> (Sim.Account, Map Sim.ContractName (NonEmpty SomeKeyPairCaps))
+       -> NEL.NonEmpty SomeKeyPairCaps
+       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
     go name cks = (name, M.singleton (Sim.ContractName "coin") cks)
 
 versionChains :: ChainwebVersion -> NESeq Sim.ChainId
@@ -473,12 +477,12 @@ singleTransaction args host (SingleTX c cid)
         Left e -> print e >> exitWith (ExitFailure 1)
         Right res -> pPrintNoColor res
   where
-    datum :: NonEmpty SomeKeyPairCaps -> Value
+    datum :: NEL.NonEmpty SomeKeyPairCaps -> Value
     datum kps = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
 
     f :: TXGConfig -> Command Text -> ExceptT ClientError IO ListenResponse
     f cfg cmd = do
-      RequestKeys (rk :| _) <- ExceptT . pactSend cfg cid $ pure cmd
+      RequestKeys (rk NEL.:| _) <- ExceptT . pactSend cfg cid $ pure cmd
       ExceptT $ pactListen cfg cid rk
 
 
@@ -511,7 +515,7 @@ work cfg = do
           loadContracts cfg host $ NEL.cons (initAdminKeysetContract v) (defaultContractLoaders v)
         DeployContracts cs -> liftIO $ do
           let v = nodeVersion cfg
-          loadContracts cfg host $ initAdminKeysetContract v :| map (createLoader v) cs
+          loadContracts cfg host $ initAdminKeysetContract v NEL.:| map (createLoader v) cs
         RunStandardContracts distribution ->
           realTransactions cfg host tv distribution
         RunCoinContract distribution ->
@@ -568,7 +572,7 @@ createLoader v (Sim.ContractName contractName) meta kp = do
   mkExec theCode theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
 -- Remember that coin contract is already loaded.
-defaultContractLoaders :: ChainwebVersion -> NonEmpty ContractLoader
+defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader
 defaultContractLoaders v =
   NEL.fromList [ helloWorldContractLoader v, simplePaymentsContractLoader v]
 
