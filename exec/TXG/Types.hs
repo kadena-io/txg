@@ -127,28 +127,27 @@ readTXCmdBytes = Sim.parseBytes "transaction-command" transactionCommandParser
 {-# INLINE readTXCmdBytes #-}
 
 transactionCommandParser :: A.Parser TXCmd
-transactionCommandParser = pollkeys <|> listenkeys
+transactionCommandParser
+    = pollkeys
+    <|> listenkeys
+    <|> (RunCoinContract defaultTimingDist <$ "transfers")
+    <|> (RunSimpleExpressions defaultTimingDist <$ "simple")
 
 pollkeys :: A.Parser TXCmd
-pollkeys = do
-  _constructor <- A.string "poll"
-  A.skipSpace
-  _open <- A.char '[' >> A.skipSpace
-  bs <- parseRequestKey
-  _close <- A.skipSpace >> A.char ']'
-  pure $ PollRequestKeys $ T.decodeUtf8 bs
-
+pollkeys = PollRequestKeys . T.decodeUtf8
+    <$> ("poll" *> s *> "[" *> s *> parseRequestKey <* s <* "]")
+  where
+    s = A.skipSpace
 
 -- This is brittle!
 parseRequestKey :: A.Parser ByteString
 parseRequestKey = B8.pack <$> A.count 43 A.anyChar
 
 listenkeys :: A.Parser TXCmd
-listenkeys = do
-  _constructor <- A.string "listen"
-  A.skipSpace
-  bs <- parseRequestKey
-  pure $ ListenerRequestKey $ T.decodeUtf8 bs
+listenkeys = ListenerRequestKey . T.decodeUtf8
+    <$> ("listen" *> s *> parseRequestKey)
+  where
+    s = A.skipSpace
 
 -------
 -- Args
@@ -218,7 +217,7 @@ scriptConfigParser = id
       <> short 'c'
       <> metavar "COMMAND"
       <> help ("The specific command to run: see examples/transaction-generator-help.md for more detail."
-               <> "The only commands supported on the commandline are 'poll' and 'listen'.")
+               <> "The only commands supported on the commandline are 'poll', 'listen', 'transfers', and 'simple'.")
   <*< field @"nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
   <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
   <*< field @"nodeVersion" .:: textOption chainwebVersionFromText

@@ -24,4 +24,4 @@ extra-deps:
 
   # --- Special Pins --- #
   - github: kadena-io/pact
-    commit: 3479b2f7f9d5cb19043baace614ea3539c429ed0
+    commit: ae01cd2ca7549b67f5e9a02dd19509c8975f12c8
