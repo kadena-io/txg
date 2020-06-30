@@ -68,7 +68,24 @@ jobs:
         package txg
           ghc-options: -Wwarn
         allow-newer:
-          *:*
+          allow-newer:
+            token-bucket:*
+            thyme:*
+            servant-swagger:*
+            servant-server:*
+            servant-client-core:*
+            servant-client:*
+            servant:*
+            swagger2:*
+            paths:*
+            pact:*
+            *:lens
+            *:base
+            *:template-haskell
+            *:lens
+            *:haskeline
+            *:Cabal
+            *:ghc-prim
     - uses: actions/cache@v1
       name: Cache dist-newstyle
       with:
