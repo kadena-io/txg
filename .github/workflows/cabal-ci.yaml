@@ -68,7 +68,6 @@ jobs:
         package txg
           ghc-options: -Wwarn
         allow-newer:
-          allow-newer:
             token-bucket:*
             thyme:*
             servant-swagger:*
