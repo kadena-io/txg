@@ -138,7 +138,7 @@ cidFromText t = case readEither (T.unpack t) of
 
 chainIds :: ChainwebVersion -> [ChainId]
 chainIds Mainnet01 = ChainId <$> [0..9]
-chainIds Development = ChainId <$> [0..9]
+chainIds Development = ChainId <$> [0..19]
 chainIds Testnet04 = ChainId <$> [0..9]
 
 -- -------------------------------------------------------------------------- --
@@ -309,4 +309,3 @@ mempoolMember
     -> [TransactionHash]
     -> IO (Either ClientError [Bool])
 mempoolMember m a v c txh = mempoolPost m a v c "/member" txh
-
