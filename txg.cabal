@@ -44,7 +44,7 @@ common commons
     , http-types            >=0.12
     , lens                  >=4.17
     , mtl                   >=2.2
-    , optparse-applicative  >=0.15
+    , optparse-applicative
     , pact                  >=3.5
     , random                >=1.1
     , text
