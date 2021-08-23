@@ -188,7 +188,7 @@ sampleKeyPairCaps = do
 
 mkCmdStr :: PublicMeta -> ChainwebVersion -> [SomeKeyPairCaps] -> String -> IO (Command Text)
 mkCmdStr meta ver kps str =
-  cmd str Null meta kps (Just (verToPactNetId ver)) Nothing
+  cmd (T.pack str) Null meta kps (Just (verToPactNetId ver)) Nothing
 
 mkCmdDataStr
   :: PublicMeta
@@ -198,7 +198,7 @@ mkCmdDataStr
   -> Value
   -> IO (Command Text)
 mkCmdDataStr meta ver kps cmdCode cmdData =
-  cmd cmdCode cmdData meta kps (Just (verToPactNetId ver)) Nothing
+  cmd (T.pack cmdCode) cmdData meta kps (Just (verToPactNetId ver)) Nothing
 
 verToChainId :: ChainwebVersion -> ChainId
 verToChainId ver = foldr const err $ chainIds ver

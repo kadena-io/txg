@@ -83,7 +83,7 @@ createPaymentsAccount v meta name = do
     res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (NEL.fromList nameKeyset, res)
   where
-    theCode = printf "(payments.create-account \"%s\" %s (read-keyset \"%s-keyset\"))" name (show (1000000.1 :: Decimal)) name
+    theCode = T.pack $ printf "(payments.create-account \"%s\" %s (read-keyset \"%s-keyset\"))" name (show (1000000.1 :: Decimal)) name
 
 createCoinAccount
     :: ChainwebVersion
@@ -97,7 +97,7 @@ createCoinAccount v meta name = do
     res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (nameKeyset, res)
   where
-    theCode = printf "(coin.create-account \"%s\" (read-keyset \"%s\"))" name name
+    theCode = T.pack $ printf "(coin.create-account \"%s\" (read-keyset \"%s\"))" name name
     isSenderAccount name' = name' `elem` map getAccount coinAccountNames
 
     getKeyset :: IO [SomeKeyPairCaps]

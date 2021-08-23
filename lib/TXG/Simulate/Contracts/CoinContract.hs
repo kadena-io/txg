@@ -9,6 +9,7 @@ import           Data.Bool
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.Map.Strict as M
 import           Data.Text (Text)
+import qualified Data.Text as T
 import           Fake
 import           Pact.ApiReq (mkExec)
 import           Pact.Types.ChainId
@@ -76,6 +77,7 @@ createCoinContractRequest v meta ks request =
     case request of
       CoinCreateAccount (Account account) (Guard g) -> do
         let theCode =
+              T.pack $
               printf
               "(coin.create-account \"%s\" (read-keyset \"%s\"))"
               account
@@ -88,12 +90,14 @@ createCoinContractRequest v meta ks request =
       CoinAccountBalance (Account account) -> do
         let theData = Null
             theCode =
+              T.pack $
               printf
               "(coin.get-balance \"%s\")"
               account
         mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
       CoinTransferAndCreate (SenderName (Account sn)) (ReceiverName (Account rn)) (Guard g) (Amount amount) -> do
         let theCode =
+              T.pack $
               printf
               "(coin.transfer-create \"%s\" \"%s\" (read-keyset \"%s\") %f)"
               sn
@@ -108,6 +112,7 @@ createCoinContractRequest v meta ks request =
 
       CoinTransfer (SenderName (Account sn)) (ReceiverName (Account rn)) (Amount amount) -> do
         let theCode =
+              T.pack $
               printf
               "(coin.transfer \"%s\" \"%s\" %f)"
               sn
