@@ -127,7 +127,7 @@ generateSimpleTransactions = do
       let theData = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
       meta <- Sim.makeMeta cid ttl gp gl
       (Nothing,)
-        <$> mkExec theCode theData meta
+        <$> mkExec (T.pack theCode) theData meta
             (NEL.toList kps)
             (Just $ CI.NetworkId $ chainwebVersionToText v)
             Nothing
@@ -469,7 +469,7 @@ singleTransaction args host (SingleTX c cid)
       kps <- testSomeKeyPairs
       meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg)
       let v = confVersion cfg
-      cmd <- mkExec (T.unpack c) (datum kps) meta
+      cmd <- mkExec c (datum kps) meta
         (NEL.toList kps)
         (Just $ CI.NetworkId $ chainwebVersionToText v)
         Nothing
@@ -569,7 +569,7 @@ createLoader v (Sim.ContractName contractName) meta kp = do
           ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS
           , T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp
           ]
-  mkExec theCode theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
+  mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
 -- Remember that coin contract is already loaded.
 defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader

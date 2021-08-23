@@ -16,6 +16,7 @@
 --
 -- TODO
 --
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module TXG.Types
   ( -- * TXCmd
     TXCmd(..)
@@ -48,6 +49,7 @@ module TXG.Types
 
 import           Configuration.Utils hiding (Error, Lens')
 import           Control.Concurrent.STM
+import           Control.Exception
 import           Control.Monad.Catch (MonadThrow(..))
 import           Control.Monad.Primitive
 import           Control.Monad.Reader hiding (local)
@@ -63,6 +65,7 @@ import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
 import qualified Data.Text.Encoding as T
+import qualified Data.Text as T
 import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
@@ -257,11 +260,42 @@ scriptConfigParser = id
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
+    pHostAddress' = undefined
     pChainId = textOption cidFromText
       % long "node-chain-id"
       <> short 'i'
       <> metavar "INT"
       <> help "The specific chain that will receive generated transactions. Can be used multiple times."
+
+instance ToJSON Hostname where
+    toJSON = toJSON . hostnameToText
+    {-# INLINE toJSON #-}
+
+instance FromJSON Hostname where
+    parseJSON = withText "Hostname" $! either fail return . fromText
+      where
+        fromText = either f return . hostnameFromText
+        f e = Left $ case fromException e of
+          Just (TextFormatException err) -> T.unpack err
+          _ -> displayException e
+
+    {-# INLINE parseJSON #-}
+
+instance ToJSON HostAddress where
+   toJSON o = object
+      [ "hostname" .= _hostAddressHost o
+      , "port" .= _hostAddressPort o
+      ]
+   {-# INLINE toJSON #-}
+
+instance FromJSON HostAddress where
+    parseJSON = withObject "HostAddress" $ \o -> HostAddress
+      <$> o .: "hostname"
+      <*> o .: "port"
+    {-# INLINE parseJSON #-}
+
+instance ToJSON Port
+instance FromJSON Port
 
 ------------
 -- TXG Monad
