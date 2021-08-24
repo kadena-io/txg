@@ -35,6 +35,10 @@ module TXG.Types
   , TXG(..)
   , TXGState(..)
   , TXGConfig(..), mkTXGConfig
+  -- * MPT Args
+  , MPTArgs(..)
+  , defaultMPTArgs
+  , mpt_scriptConfigParser
     -- * Pact API
   , pactPost
   , ClientError(..)
@@ -69,6 +73,7 @@ import qualified Data.Text as T
 import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
+import qualified Options.Applicative as O
 import           Pact.Parse
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
@@ -157,6 +162,138 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 -------
 -- Args
 -------
+
+
+data MPTArgs = MPTArgs
+  {
+    mpt_transferRate      :: !Int -- per second
+  , mpt_senderAccount     :: !Text
+  , mpt_rcvAccount        :: !Text
+  , mpt_batchSize         :: !BatchSize
+  , mpt_confirmationDepth :: !Int
+  , mpt_verbose           :: !Verbose
+  , mpt_gasLimit          :: GasLimit
+  , mpt_gasPrice          :: GasPrice
+  , mpt_timetolive        :: TTLSeconds
+  , mpt_hostAddresses   :: ![HostAddress]
+  , mpt_nodeVersion     :: !ChainwebVersion
+  } deriving (Show, Generic)
+
+
+instance ToJSON MPTArgs where
+  toJSON o = object
+    [
+      "transferRate"      .= mpt_transferRate o
+    , "senderAccount"     .= mpt_senderAccount o
+    , "rcvAccount"        .= mpt_rcvAccount o
+    , "batchSize"         .= mpt_batchSize o
+    , "confirmationDepth" .= mpt_confirmationDepth o
+    , "verbose"           .= mpt_verbose o
+    , "gasLimit"          .= mpt_gasLimit o
+    , "gasPrice"          .= mpt_gasPrice o
+    , "timetolive"        .= mpt_timetolive o
+    , "hostAddresses"     .= mpt_hostAddresses o
+    , "nodeVersion"       .= mpt_nodeVersion o
+    ]
+
+instance FromJSON (MPTArgs -> MPTArgs) where
+  parseJSON = withObject "MPTArgs" $ \o -> id
+    <$< field @"mpt_transferRate" ..: "mpt_transferRate" % o
+    <*< field @"mpt_senderAccount" ..: "mpt_senderAccount" % o
+    <*< field @"mpt_rcvAccount" ..: "mpt_rcvAccount" % o
+    <*< field @"mpt_batchSize" ..: "mpt_batchSize" % o
+    <*< field @"mpt_confirmationDepth" ..: "mpt_confirmationDepth" % o
+    <*< field @"mpt_verbose" ..: "mpt_verbose" % o
+    <*< field @"mpt_gasLimit" ..: "mpt_gasLimit" % o
+    <*< field @"mpt_gasPrice" ..: "mpt_gasPrice" % o
+    <*< field @"mpt_timetolive" ..: "mpt_timetolive" % o
+    <*< field @"mpt_hostAddresses" ..: "mpt_hostAddresses" % o
+    <*< field @"mpt_nodeVersion" ..: "mpt_nodeVersion" % o
+
+defaultMPTArgs :: MPTArgs
+defaultMPTArgs = MPTArgs
+  {
+    mpt_transferRate      = 5
+  , mpt_senderAccount     = "sender01"
+  , mpt_rcvAccount        = "sender02"
+  , mpt_batchSize         = BatchSize 1
+  , mpt_confirmationDepth = 6
+  , mpt_verbose           = Verbose False
+  , mpt_gasLimit          = Sim.defGasLimit
+  , mpt_gasPrice          = Sim.defGasPrice
+  , mpt_timetolive        = Sim.defTTL
+  , mpt_hostAddresses     = mempty
+  , mpt_nodeVersion       = Development
+  }
+
+mpt_scriptConfigParser :: MParser MPTArgs
+mpt_scriptConfigParser = id
+  <$< field @"mpt_transferRate" .:: option auto
+    % long "transfer-rate"
+    <> metavar "INT"
+    <> help "How many transaction batches should be sent per request"
+  <*< field @"mpt_senderAccount" .:: option auto
+    % long "sender-account"
+    <> metavar "STRING"
+    <> help "account name for transfer sender"
+  <*< field @"mpt_rcvAccount" .:: option auto
+    % long "receiver-account"
+    <> metavar "STRING"
+    <> help "account name for transfer recipient"
+  <*< field @"mpt_batchSize" .:: option auto
+    % long "batch-size"
+    <> short 'b'
+    <> metavar "INT"
+    <> help "Number of transactions to bundle into a single 'send' call"
+  <*< field @"mpt_confirmationDepth" .:: option auto
+    % long "confirmation-depth"
+    <> metavar "INT"
+    <> help "confirmation depth"
+  <*< field @"mpt_verbose" .:: option auto
+      % long "verbose"
+      <> metavar "BOOL"
+      <> help "Whether to print out details of each transaction in a 'send' call"
+  <*< field @"mpt_gasLimit" .:: option parseGasLimit
+      % long "gasLimit"
+      <> metavar "INT"
+      <> help "The gas limit of each auto-generated transaction"
+  <*< field @"mpt_gasPrice" .:: option parseGasPrice
+      % long "gasPrice"
+      <> metavar "DECIMAL"
+      <> help "The gas price of each auto-generated transaction"
+  <*< field @"mpt_timetolive" .:: option parseTTL
+      % long "time-to-live"
+      <> metavar "SECONDS"
+      <> help "The time to live (in seconds) of each auto-generated transaction"
+  <*< field @"mpt_hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
+  <*< field @"mpt_nodeVersion" .:: textOption chainwebVersionFromText
+      % long "chainweb-version"
+      <> short 'v'
+      <> metavar "VERSION"
+      <> help "Chainweb Version"
+  where
+    parseGasLimit =
+        GasLimit . ParsedInteger <$> read' @Integer "Cannot read gasLimit."
+    parseGasPrice =
+        GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
+    parseTTL =
+        TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
+
+read' :: Read a => String -> ReadM a
+read' msg = eitherReader (bimap (const msg) id . readEither)
+
+pHostAddress' :: Maybe String -> O.Parser HostAddress
+pHostAddress' service = HostAddress <$> pHostname service <*> pPort service
+  where
+    pHostname s = option (eitherReader (either f return . hostnameFromText . T.pack))
+      % long (maybe "" (<> "-") s <> "hostname")
+      <> help ("hostname" <> maybe "" (" for " <>) s)
+    pPort s = option (eitherReader (either f return . portFromText . T.pack))
+      % long (maybe "" (<> "-") s <> "port")
+      <> help ("port number" <> maybe "" (" for " <>) s)
+    f e = Left $ case fromException e of
+      Just( TextFormatException err) -> T.unpack err
+      _ -> displayException e
 
 data Args = Args
   { scriptCommand   :: !TXCmd
@@ -258,9 +395,6 @@ scriptConfigParser = id
         GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
     parseTTL =
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
-    read' :: Read a => String -> ReadM a
-    read' msg = eitherReader (bimap (const msg) id . readEither)
-    pHostAddress' = undefined
     pChainId = textOption cidFromText
       % long "node-chain-id"
       <> short 'i'
