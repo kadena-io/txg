@@ -90,3 +90,19 @@ executable txg
     , stm
     , txg
     , yet-another-logger   >=0.3
+
+executable mempool-p2p-tester
+  import: commons
+  main-is: MempoolP2PTester.hs
+  hs-source-dirs: exec
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  other-modules: TXG.Types
+  build-depends:
+    , generic-lens       >= 1.1
+    , mwc-random           >=0.14
+    , nonempty-containers  >=0.3
+    , pretty-simple        >=2.2
+    , primitive            >=0.6
+    , stm
+    , txg
+    , yet-another-logger >= 0.3
