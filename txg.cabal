@@ -93,16 +93,22 @@ executable txg
 
 executable mempool-p2p-tester
   import: commons
-  main-is: MempoolP2PTester.hs
+  main-is: MPT.hs
   hs-source-dirs: exec
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
-  other-modules: TXG.Types
+  other-modules:
+    TXG.Types
+    MPT.Types
+    MPT.Utils
   build-depends:
-    , generic-lens       >= 1.1
-    , mwc-random           >=0.14
-    , nonempty-containers  >=0.3
-    , pretty-simple        >=2.2
-    , primitive            >=0.6
+    , async               >=2.2
+    , sqlite-simple       >= 0.4.17.0
+    , generic-lens        >= 1.1
+    , lens-aeson          >= 1.1
+    , mwc-random          >=0.14
+    , nonempty-containers >=0.3
+    , pretty-simple       >=2.2
+    , primitive           >=0.6
     , stm
     , txg
-    , yet-another-logger >= 0.3
+    , yet-another-logger  >= 0.3
