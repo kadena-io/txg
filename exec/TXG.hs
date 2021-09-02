@@ -75,7 +75,7 @@ import           TXG.Types
 
 ---
 
-generateDelay :: MonadIO m => TXG m Int
+generateDelay :: MonadIO m => TXG TXGState m Int
 generateDelay = do
   distribution <- asks confTimingDist
   gen <- gets gsGen
@@ -86,7 +86,7 @@ generateDelay = do
 
 generateSimpleTransactions
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  => TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
 generateSimpleTransactions = do
   -- Choose a Chain to send these transactions to, and cycle the state.
   cid <- NES.head <$> gets gsChains
@@ -147,7 +147,7 @@ generateTransactions
     => Bool
     -> Verbose
     -> CmdChoice
-    -> TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+    -> TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
 generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
   -- Choose a Chain to send this transaction to, and cycle the state.
   cid <- NES.head <$> gets gsChains
@@ -272,8 +272,8 @@ isMempoolMember c cid = mempoolMember
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
-  -> TXG m ()
+  => TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  -> TXG TXGState m ()
 loop f = do
   (cid, msgs, transactions) <- f
   config <- ask

@@ -166,8 +166,8 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 read' :: Read a => String -> ReadM a
 read' msg = eitherReader (bimap (const msg) id . readEither)
 
-pHostAddress' :: Maybe String -> O.Parser HostAddress
-pHostAddress' service = HostAddress <$> pHostname service <*> pPort service
+pHostAddress'' :: Maybe String -> O.Parser HostAddress
+pHostAddress'' service = HostAddress <$> pHostname service <*> pPort service
   where
     pHostname s = option (eitherReader (either f return . hostnameFromText . T.pack))
       % long (maybe "" (<> "-") s <> "hostname")
@@ -245,7 +245,7 @@ scriptConfigParser = id
       <> help ("The specific command to run: see examples/transaction-generator-help.md for more detail."
                <> "The only commands supported on the commandline are 'poll', 'listen', 'transfers', and 'simple'.")
   <*< field @"nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
-  <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
+  <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress'' Nothing)
   <*< field @"nodeVersion" .:: textOption chainwebVersionFromText
       % long "chainweb-version"
       <> short 'v'
@@ -371,12 +371,12 @@ mkConfig
   -> TTLSeconds
   -> HostAddress
   -> IO TXGConfig
-mkConfig mdistribution version batchSize v gl gp ttl hostAddr =
+mkConfig mdistribution version bsize v gl gp ttl hostAddr =
   TXGConfig mdistribution mempty
   <$> pure hostAddr
   <*> unsafeManager
   <*> pure version
-  <*> pure batchSize
+  <*> pure bsize
   <*> pure v
   <*> pure gl
   <*> pure gp
