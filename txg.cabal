@@ -109,6 +109,7 @@ executable mempool-p2p-tester
     , nonempty-containers >=0.3
     , pretty-simple       >=2.2
     , primitive           >=0.6
+    , retry
     , stm
     , txg
     , yet-another-logger  >= 0.3
