@@ -20,33 +20,18 @@
 module MPT.Types where
 
 import           Configuration.Utils hiding (Error, Lens')
-import           Control.Concurrent.STM
 import           Control.Exception
-import           Control.Monad.Catch (MonadThrow(..))
-import           Control.Monad.Primitive
-import           Control.Monad.Reader hiding (local)
-import           Control.Monad.State.Strict
-import qualified Data.Attoparsec.ByteString.Char8 as A
 import           Data.Bifunctor
-import           Data.ByteString (ByteString)
-import qualified Data.ByteString.Char8 as B8
 import           Data.Decimal
 import           Data.Generics.Product.Fields (field)
-import qualified Data.List.NonEmpty as NEL
-import           Data.Map (Map)
-import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
-import qualified Data.Text.Encoding as T
 import qualified Data.Text as T
 import           GHC.Generics
 import           Network.HostAddress
-import           Network.HTTP.Client hiding (Proxy)
 import qualified Options.Applicative as O
 import           Pact.Parse
 import           Pact.Types.ChainMeta
-import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Gas
-import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Types

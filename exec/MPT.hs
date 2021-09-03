@@ -40,6 +40,7 @@ import qualified Data.Aeson.Types as A
 import           Data.Aeson.Lens
 import qualified Data.ByteString.Lazy as LB
 import           Data.Generics.Product.Fields (field)
+import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
 import qualified Data.HashMap.Strict as HM
@@ -221,22 +222,13 @@ queryCut mgr h ni = do
 confirmationDepth :: Int
 confirmationDepth = 6
 
-loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO Int64
-loopUntilConfirmationDepth seconds cid startHeight tcut = do
-  threadDelay $ seconds * 1000000
-  cut <- atomically $ readTVar tcut
-  let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
-  if height < (startHeight + confirmationDepth)
-    then do
-      loopUntilConfirmationDepth seconds cid startHeight tcut
-    else getCurrentTimeInt64
-
-
-check' :: RetryStatus -> Either String a -> IO Bool
-check' _ ev = pure $
-  case ev of
-    Left _retry -> True
-    Right _result -> False
+loopUntilConfirmationDepth :: ChainId -> BlockHeight -> TVar Cut -> IO Int64
+loopUntilConfirmationDepth cid startHeight tcut = do
+  atomically $ do
+    cut <- readTVar tcut
+    let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
+    check (height >= (startHeight + confirmationDepth))
+  getCurrentTimeInt64
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
@@ -245,7 +237,7 @@ loop
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
 loop tcut dbFile f = forever $ do
-  liftIO $ threadDelay $ 1_000_0000 * 60
+  liftIO $ threadDelay $ 60_000_000
   (cid, msgs, transactions) <- f
   config <- ask
   (requestKeys, start, end) <- liftIO $ trackTime $ pactSend config cid transactions
@@ -260,35 +252,35 @@ loop tcut dbFile f = forever $ do
       count <- liftIO $ readTVarIO countTV
       lift . logg Info $ "Transaction count: " <> T.pack (show count)
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
-      let retrier = retrying policy check' . const
+      let retrier = retrying policy (const (pure . isRight)) . const
           policy :: RetryPolicyM IO
           policy = exponentialBackoff 250_000 <> limitRetries 3
-      liftIO $ withAsync (retrier $ pollRequestKeys config cid rks) $ \a -> do
-        wait a >>= \case
-          Left err -> liftIO $ putStrLn $ printf "[ERROR] Caught this error while polling for these request keys (%s) %s" (show rks) err
-          Right (poll_start, poll_end, result) -> iforM_ result $ \rk res -> do
+      poll_result <- liftIO $ retrier $ pollRequestKeys config cid rks
+      case poll_result of
+        Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show rks) err
+        Right (poll_start, poll_end, result) -> liftIO $ iforM_ result $ \rk res -> do
+            transmitMempoolStat dbFile $ MempoolStat
+              {
+                ms_chainid = cid
+              , ms_txhash = rk
+              , ms_stat = TimeUntilMempoolAcceptance (TimeSpan start end)
+              }
+            transmitMempoolStat dbFile $ MempoolStat
+              {
+                ms_chainid = cid
+              , ms_txhash = rk
+              , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
+              }
+            let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
+            cstart <- getCurrentTimeInt64
+            withAsync (loopUntilConfirmationDepth cid h tcut) $ \a' -> do
+              cend <- wait a'
               transmitMempoolStat dbFile $ MempoolStat
                 {
-                  ms_chainid = cid
-                , ms_txhash = rk
-                , ms_stat = TimeUntilMempoolAcceptance (TimeSpan start end)
+                    ms_chainid = cid
+                ,  ms_txhash = rk
+                , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
                 }
-              transmitMempoolStat dbFile $ MempoolStat
-                {
-                  ms_chainid = cid
-                , ms_txhash = rk
-                , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
-                }
-              let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
-              cstart <- getCurrentTimeInt64
-              withAsync (loopUntilConfirmationDepth 60 cid h tcut) $ \a' -> do
-                cend <- wait a'
-                transmitMempoolStat dbFile $ MempoolStat
-                  {
-                     ms_chainid = cid
-                  ,  ms_txhash = rk
-                  , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
-                  }
 
       forM_ (Compose msgs) $ \m ->
         lift . logg Info $ "Actual transaction: " <> m
@@ -474,7 +466,6 @@ pactListen c cid = listen
   (confHost c)
   (confVersion c)
   cid
-
 
 pollRequestKeys :: TXGConfig -> ChainId -> RequestKeys -> IO (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
 pollRequestKeys cfg cid rkeys = do
