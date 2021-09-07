@@ -55,7 +55,7 @@ jobs:
     - name: Copy build txg artifact (txg)
       run: cp `cabal list-bin exe:txg` .
     - name: Copy build artifact (mempool-p2p-tester)
-      run: cp `cabal list-bin exe:mempool-p2p-tester`
+      run: cp `cabal list-bin exe:mempool-p2p-tester` .
     - name: Stripping txg binary
       run: strip txg
     - name: Stripping mempool-p2p-tester binary
