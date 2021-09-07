@@ -81,7 +81,7 @@ generateDelay = do
   gen <- gets gsGen
   case distribution of
     Just (GaussianTD (Gaussian gmean gvar)) -> liftIO (truncate <$> normal gmean gvar gen)
-    Just (UniformTD (Uniform ulow uhigh)) -> liftIO (truncate <$> uniformR (ulow, uhigh) gen)
+    Just (UniformTD (Uniform ulow uhigh)) -> liftIO (truncate <$> System.Random.MWC.uniformR (ulow, uhigh) gen)
     Nothing -> error "generateDelay: impossible"
 
 generateSimpleTransactions
