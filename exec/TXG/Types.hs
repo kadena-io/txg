@@ -36,7 +36,7 @@ module TXG.Types
   , TXG(..)
   , TXGState(..)
   , MPTState(..)
-  , TXGConfig(..), mkTXGConfig, mkConfig
+  , TXGConfig(..), mkTXGConfig
     -- * Pact API
   , pactPost
   , ClientError(..)
@@ -52,7 +52,6 @@ module TXG.Types
 
 import           Configuration.Utils hiding (Error, Lens')
 import           Control.Concurrent.STM
-import           Control.Exception
 import           Control.Monad.Catch (MonadThrow(..))
 import           Control.Monad.Primitive
 import           Control.Monad.Reader hiding (local)
@@ -69,7 +68,6 @@ import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
 import qualified Data.Text.Encoding as T
-import qualified Data.Text as T
 import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
@@ -166,19 +164,6 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 read' :: Read a => String -> ReadM a
 read' msg = eitherReader (bimap (const msg) id . readEither)
 
-pHostAddress'' :: Maybe String -> O.Parser HostAddress
-pHostAddress'' service = HostAddress <$> pHostname service <*> pPort service
-  where
-    pHostname s = option (eitherReader (either f return . hostnameFromText . T.pack))
-      % long (maybe "" (<> "-") s <> "hostname")
-      <> help ("hostname" <> maybe "" (" for " <>) s)
-    pPort s = option (eitherReader (either f return . portFromText . T.pack))
-      % long (maybe "" (<> "-") s <> "port")
-      <> help ("port number" <> maybe "" (" for " <>) s)
-    f e = Left $ case fromException e of
-      Just( TextFormatException err) -> T.unpack err
-      _ -> displayException e
-
 data Args = Args
   { scriptCommand   :: !TXCmd
   , nodeChainIds    :: ![ChainId]
@@ -245,7 +230,7 @@ scriptConfigParser = id
       <> help ("The specific command to run: see examples/transaction-generator-help.md for more detail."
                <> "The only commands supported on the commandline are 'poll', 'listen', 'transfers', and 'simple'.")
   <*< field @"nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
-  <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress'' Nothing)
+  <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
   <*< field @"nodeVersion" .:: textOption chainwebVersionFromText
       % long "chainweb-version"
       <> short 'v'
@@ -286,36 +271,6 @@ pChainId = textOption cidFromText
   <> short 'i'
   <> metavar "INT"
   <> help "The specific chain that will receive generated transactions. Can be used multiple times."
-
-instance ToJSON Hostname where
-    toJSON = toJSON . hostnameToText
-    {-# INLINE toJSON #-}
-
-instance FromJSON Hostname where
-    parseJSON = withText "Hostname" $! either fail return . fromText
-      where
-        fromText = either f return . hostnameFromText
-        f e = Left $ case fromException e of
-          Just (TextFormatException err) -> T.unpack err
-          _ -> displayException e
-
-    {-# INLINE parseJSON #-}
-
-instance ToJSON HostAddress where
-   toJSON o = object
-      [ "hostname" .= _hostAddressHost o
-      , "port" .= _hostAddressPort o
-      ]
-   {-# INLINE toJSON #-}
-
-instance FromJSON HostAddress where
-    parseJSON = withObject "HostAddress" $ \o -> HostAddress
-      <$> o .: "hostname"
-      <*> o .: "port"
-    {-# INLINE parseJSON #-}
-
-instance ToJSON Port
-instance FromJSON Port
 
 ------------
 -- TXG Monad
@@ -361,37 +316,21 @@ data TXGConfig = TXGConfig
   , confTTL :: TTLSeconds
   } deriving (Generic)
 
-mkConfig
-  :: Maybe TimingDistribution
-  -> ChainwebVersion
-  -> BatchSize
-  -> Verbose
-  -> GasLimit
-  -> GasPrice
-  -> TTLSeconds
-  -> HostAddress
-  -> IO TXGConfig
-mkConfig mdistribution version bsize v gl gp ttl hostAddr =
-  TXGConfig mdistribution mempty
-  <$> pure hostAddr
-  <*> unsafeManager
-  <*> pure version
-  <*> pure bsize
-  <*> pure v
-  <*> pure gl
-  <*> pure gp
-  <*> pure ttl
-
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
-mkTXGConfig mdistribution config hostAddr =
-  mkConfig mdistribution
-    (nodeVersion config)
-    (batchSize config)
-    (verbose config)
-    (gasLimit config)
-    (gasPrice config)
-    (timetolive config)
-    hostAddr
+mkTXGConfig mdistribution config hostAddr = do
+  mgr <- unsafeManager
+  pure $ TXGConfig
+    { confTimingDist = mdistribution
+    , confKeysets = mempty
+    , confHost = hostAddr
+    , confManager = mgr
+    , confVersion = nodeVersion config
+    , confBatchSize = batchSize config
+    , confVerbose = verbose config
+    , confGasLimit = gasLimit config
+    , confGasPrice = gasPrice config
+    , confTTL = timetolive config
+    }
 
 -- -------------------------------------------------------------------------- --
 -- MISC

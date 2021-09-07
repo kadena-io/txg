@@ -396,7 +396,18 @@ coinTransfers
    -> TimingDistribution
    -> LoggerT T.Text IO ()
 coinTransfers config manager tv tcut host distribution = do
-    let cfg = mkMPTConfig (Just distribution) manager config host
+    let cfg = TXGConfig
+            { confTimingDist = Just distribution
+            , confKeysets = mempty
+            , confHost = host
+            , confManager = manager
+            , confVersion = mpt_nodeVersion config
+            , confBatchSize = mpt_batchSize config
+            , confVerbose = mpt_verbose config
+            , confGasLimit = mpt_gasLimit config
+            , confGasPrice = mpt_gasPrice config
+            , confTTL = mpt_timetolive config
+            }
 
     let chains = maybe (versionChains (mpt_nodeVersion config)) NES.fromList
                   . NEL.nonEmpty

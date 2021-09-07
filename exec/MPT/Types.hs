@@ -20,7 +20,6 @@
 module MPT.Types where
 
 import           Configuration.Utils hiding (Error, Lens')
-import           Control.Exception
 import           Data.Bifunctor
 import           Data.Decimal
 import           Data.Generics.Product.Fields (field)
@@ -179,19 +178,6 @@ pChainId = textOption cidFromText
 
 read' :: Read a => String -> ReadM a
 read' msg = eitherReader (bimap (const msg) id . readEither)
-
-pHostAddress' :: Maybe String -> O.Parser HostAddress
-pHostAddress' service = HostAddress <$> pHostname service <*> pPort service
-  where
-    pHostname s = option (eitherReader (either f return . hostnameFromText . T.pack))
-      % long (maybe "" (<> "-") s <> "hostname")
-      <> help ("hostname" <> maybe "" (" for " <>) s)
-    pPort s = option (eitherReader (either f return . portFromText . T.pack))
-      % long (maybe "" (<> "-") s <> "port")
-      <> help ("port number" <> maybe "" (" for " <>) s)
-    f e = Left $ case fromException e of
-      Just( TextFormatException err) -> T.unpack err
-      _ -> displayException e
 
 data ErrorType = RateLimiting | ClientError | ServerError | OtherError T.Text
   deriving (Eq,Ord,Show)
