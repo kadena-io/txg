@@ -99,7 +99,6 @@ executable mempool-p2p-tester
   other-modules:
     TXG.Types
     MPT.Types
-    MPT.Utils
   build-depends:
     , async               >=2.2
     , sqlite-simple       >= 0.4.17.0

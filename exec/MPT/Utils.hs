@@ -1,3 +1,0 @@
--- |
-
-module MPT.Utils where

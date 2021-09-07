@@ -161,9 +161,6 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 -- Args
 -------
 
-read' :: Read a => String -> ReadM a
-read' msg = eitherReader (bimap (const msg) id . readEither)
-
 data Args = Args
   { scriptCommand   :: !TXCmd
   , nodeChainIds    :: ![ChainId]
@@ -258,6 +255,8 @@ scriptConfigParser = id
       <> metavar "SECONDS"
       <> help "The time to live (in seconds) of each auto-generated transaction"
   where
+    read' :: Read a => String -> ReadM a
+    read' msg = eitherReader (bimap (const msg) id . readEither)
     parseGasLimit =
         GasLimit . ParsedInteger <$> read' @Integer "Cannot read gasLimit."
     parseGasPrice =

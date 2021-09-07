@@ -162,6 +162,8 @@ mpt_scriptConfigParser = id
     <> metavar "FILEPATH"
     <> help "File name for sqlite database."
   where
+    read' :: Read a => String -> ReadM a
+    read' msg = eitherReader (bimap (const msg) id . readEither)
     parseGasLimit =
         GasLimit . ParsedInteger <$> read' @Integer "Cannot read gasLimit."
     parseGasPrice =
@@ -175,9 +177,6 @@ pChainId = textOption cidFromText
   <> short 'i'
   <> metavar "INT"
   <> help "The specific chain that will receive generated transactions. Can be used multiple times."
-
-read' :: Read a => String -> ReadM a
-read' msg = eitherReader (bimap (const msg) id . readEither)
 
 data ErrorType = RateLimiting | ClientError | ServerError | OtherError T.Text
   deriving (Eq,Ord,Show)
