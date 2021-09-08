@@ -1,11 +1,12 @@
-{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE BangPatterns               #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE DeriveAnyClass             #-}
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE DerivingStrategies         #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE NumericUnderscores         #-}
+{-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE TypeApplications           #-}
 
 -- | Module: MPT.Types
@@ -20,10 +21,13 @@
 module MPT.Types where
 
 import           Configuration.Utils hiding (Error, Lens')
+import           Control.Concurrent.STM
+import           Control.Monad.Primitive
 import           Data.Bifunctor
+import qualified Data.ByteString.Lazy as LB
 import           Data.Decimal
 import           Data.Generics.Product.Fields (field)
-import           Data.Text (Text)
+import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Text as T
 import           GHC.Generics
 import           Network.HostAddress
@@ -31,6 +35,7 @@ import qualified Options.Applicative as O
 import           Pact.Parse
 import           Pact.Types.ChainMeta
 import           Pact.Types.Gas
+import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Types
@@ -43,9 +48,8 @@ import           TXG.Utils
 
 data MPTArgs = MPTArgs
   {
-    mpt_transferRate      :: !Int -- per second
-  , mpt_senderAccount     :: !Text
-  , mpt_rcvAccount        :: !Text
+    mpt_transferRate      :: !Int -- number of microseconds to wait before sending next coin contract transfer transaction
+  , mpt_accounts          :: ![String]
   , mpt_batchSize         :: !BatchSize
   , mpt_confirmationDepth :: !Int
   , mpt_verbose           :: !Verbose
@@ -63,8 +67,7 @@ instance ToJSON MPTArgs where
   toJSON o = object
     [
       "transferRate"      .= mpt_transferRate o
-    , "senderAccount"     .= mpt_senderAccount o
-    , "rcvAccount"        .= mpt_rcvAccount o
+    , "accounts"          .= mpt_accounts o
     , "batchSize"         .= mpt_batchSize o
     , "confirmationDepth" .= mpt_confirmationDepth o
     , "verbose"           .= mpt_verbose o
@@ -80,8 +83,7 @@ instance ToJSON MPTArgs where
 instance FromJSON (MPTArgs -> MPTArgs) where
   parseJSON = withObject "MPTArgs" $ \o -> id
     <$< field @"mpt_transferRate" ..: "mpt_transferRate" % o
-    <*< field @"mpt_senderAccount" ..: "mpt_senderAccount" % o
-    <*< field @"mpt_rcvAccount" ..: "mpt_rcvAccount" % o
+    <*< field @"mpt_accounts" ..: "mpt_accounts" % o
     <*< field @"mpt_batchSize" ..: "mpt_batchSize" % o
     <*< field @"mpt_confirmationDepth" ..: "mpt_confirmationDepth" % o
     <*< field @"mpt_verbose" ..: "mpt_verbose" % o
@@ -96,9 +98,8 @@ instance FromJSON (MPTArgs -> MPTArgs) where
 defaultMPTArgs :: MPTArgs
 defaultMPTArgs = MPTArgs
   {
-    mpt_transferRate      = 5
-  , mpt_senderAccount     = "sender01"
-  , mpt_rcvAccount        = "sender02"
+    mpt_transferRate      = 1_000_000
+  , mpt_accounts          = ["sender01", "sender02"]
   , mpt_batchSize         = BatchSize 1
   , mpt_confirmationDepth = 6
   , mpt_verbose           = Verbose False
@@ -116,15 +117,11 @@ mpt_scriptConfigParser = id
   <$< field @"mpt_transferRate" .:: option auto
     % long "transfer-rate"
     <> metavar "INT"
-    <> help "How many transaction batches should be sent per request"
-  <*< field @"mpt_senderAccount" .:: option auto
-    % long "sender-account"
+    <> help "Number of microseconds to wait before sending next coin contract transfer transaction"
+  <*< field @"mpt_accounts" .:: option auto
+    % long "accounts"
     <> metavar "STRING"
-    <> help "account name for transfer sender"
-  <*< field @"mpt_rcvAccount" .:: option auto
-    % long "receiver-account"
-    <> metavar "STRING"
-    <> help "account name for transfer recipient"
+    <> help "accounts name for transfers"
   <*< field @"mpt_batchSize" .:: option auto
     % long "batch-size"
     <> short 'b'
@@ -180,3 +177,12 @@ pChainId = textOption cidFromText
 
 data ErrorType = RateLimiting | ClientError | ServerError | OtherError T.Text
   deriving (Eq,Ord,Show)
+
+type Cut = LB.ByteString
+
+data MPTState = MPTState
+  { mptGen    :: !(Gen (PrimState IO))
+  , mptCounter :: !(TVar TXCount)
+  , mptLatestCut :: !(TVar Cut)
+  , mptChains :: !(NESeq ChainId)
+  } deriving (Generic)

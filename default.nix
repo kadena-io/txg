@@ -29,7 +29,7 @@ in haskellPackages.developPackage {
     } {})) "with-configuration-tools") "with-aeson") (drv: {
       librarySystemDepends = drv.librarySystemDepends or [] ++ [self.aeson self.configuration-tools optparse-applicative];
     });
-    pact = dontCheck super.pact;
+    pact = enableCabalFlag (dontCheck super.pact) "build-tool";
     sqlite-simple = self.callHackageDirect {
       pkg = "sqlite-simple";
       ver = "0.4.18.0";

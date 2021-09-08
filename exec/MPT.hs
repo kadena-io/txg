@@ -122,7 +122,7 @@ worker config = do
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
     act :: TVar TXCount -> TVar Cut -> HostAddress -> Manager -> LoggerT T.Text IO ()
     act tv tcut host@(HostAddress h p) mgr = localScope (const [(hostnameToText h, portToText p)]) $
-      coinTransfers config mgr tv tcut host defaultTimingDist
+      coinTransfers config mgr tv tcut host $ UniformTD (Uniform (fromIntegral $ mpt_transferRate config) (fromIntegral $ mpt_transferRate config))
 
 
 cutLoop :: Manager -> TVar Cut -> HostAddress -> NodeInfo -> IO ()
@@ -218,12 +218,8 @@ queryCut mgr h ni = do
   res <- handleRequest req mgr
   pure $ responseBody <$> res
 
--- TODO Make this a configuration paramteter
-confirmationDepth :: Int
-confirmationDepth = 6
-
-loopUntilConfirmationDepth :: ChainId -> BlockHeight -> TVar Cut -> IO Int64
-loopUntilConfirmationDepth cid startHeight tcut = do
+loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO Int64
+loopUntilConfirmationDepth confirmationDepth cid startHeight tcut = do
   atomically $ do
     cut <- readTVar tcut
     let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
@@ -233,10 +229,11 @@ loopUntilConfirmationDepth cid startHeight tcut = do
 loop
   :: (MonadIO m, MonadLog T.Text m)
   => TVar Cut
+  -> Int
   -> FilePath
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
-loop tcut dbFile f = forever $ do
+loop tcut confirmationDepth dbFile f = forever $ do
   liftIO $ threadDelay $ 60_000_000
   (cid, msgs, transactions) <- f
   config <- ask
@@ -273,7 +270,7 @@ loop tcut dbFile f = forever $ do
               }
             let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
             cstart <- getCurrentTimeInt64
-            withAsync (loopUntilConfirmationDepth cid h tcut) $ \a' -> do
+            withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
               cend <- wait a'
               transmitMempoolStat dbFile $ MempoolStat
                 {
@@ -426,8 +423,9 @@ coinTransfers config manager tv tcut host distribution = do
 
     -- set up values for running the effect stack?
     gen <- liftIO createSystemRandom
-    let act = loop tcut (mpt_dbFile config) (generateTransactions True (mpt_verbose config) CoinContract)
+    let act = loop tcut (mpt_confirmationDepth config) (mpt_dbFile config) (generateTransactions True (mpt_verbose config) CoinContract)
         env = set (field @"confKeysets") accountMap cfg
+          & over (field @"confKeysets") (fmap (M.filterWithKey (\(Sim.Account k) _ -> k `elem` (mpt_accounts config))))
         stt = MPTState gen tv tcut chains
 
     evalStateT (runReaderT (runTXG act) env) stt

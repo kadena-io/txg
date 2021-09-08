@@ -35,7 +35,6 @@ module TXG.Types
     -- * TXG Monad
   , TXG(..)
   , TXGState(..)
-  , MPTState(..)
   , TXGConfig(..), mkTXGConfig
     -- * Pact API
   , pactPost
@@ -43,7 +42,6 @@ module TXG.Types
   , unsafeManager
     -- * Misc.
   , TXCount(..)
-  , Cut
   , BatchSize(..)
   , Verbose(..)
   , nelReplicate
@@ -60,7 +58,6 @@ import qualified Data.Attoparsec.ByteString.Char8 as A
 import           Data.Bifunctor
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
-import qualified Data.ByteString.Lazy as LB
 import           Data.Decimal
 import           Data.Generics.Product.Fields (field)
 import qualified Data.List.NonEmpty as NEL
@@ -291,15 +288,6 @@ data TXGState = TXGState
   { gsGen     :: !(Gen (PrimState IO))
   , gsCounter :: !(TVar TXCount)
   , gsChains  :: !(NESeq ChainId)
-  } deriving (Generic)
-
-type Cut = LB.ByteString
-
-data MPTState = MPTState
-  { mptGen    :: !(Gen (PrimState IO))
-  , mptCounter :: !(TVar TXCount)
-  , mptLatestCut :: !(TVar Cut)
-  , mptChains :: !(NESeq ChainId)
   } deriving (Generic)
 
 data TXGConfig = TXGConfig
