@@ -1,0 +1,70 @@
+name: Build project
+
+on: push
+
+jobs:
+  build:
+    name: Build master with ${{ matrix.ghc }} / ${{ matrix.cabal }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ghc: ['8.8.4']
+        cabal: ['3.4']
+        os: ['ubuntu-18.04', 'ubuntu-20.04', 'macOS-latest']
+
+    steps:
+    - name: 'GitHub actions env workaround'
+      run: 'echo "ACTIONS_ALLOW_UNSECURE_COMMANDS=true" >> $GITHUB_ENV'
+
+    # Setup
+    - name: Checkout repository
+      uses: actions/checkout@v1
+
+    # Haskell Setup
+    - name: Install GHC and Cabal
+      uses: haskell/actions/setup@v1.2.3
+      with:
+         ghc-version: ${{ matrix.ghc }}
+         cabal-version: ${{ matrix.cabal }}
+    - name: Confirm GHC and Cabal installation
+      run: |
+        ghc --version
+        cabal --version
+    # Project Setup
+    - uses: actions/cache@v2
+      name: Cache dist-newstyle
+      with:
+        path: |
+          ~/.cabal/packages
+          ~/.cabal/store
+          dist-newstyle
+        key: ${{ matrix.os }}-${{ matrix.ghc }}-4-cabal
+
+    # Build
+    - name: Update package database
+      run: cabal update
+    - name: Display outdated packages
+      run: cabal outdated
+    - name: Install build dependencies
+      run: cabal build --only-dependencies
+    - name: Build
+      run: cabal build
+
+    # Upload artifacts
+    - name: Copy build txg artifact (txg)
+      run: cp `cabal list-bin exe:txg` .
+    - name: Copy build artifact (mempool-p2p-tester)
+      run: cp `cabal list-bin exe:mempool-p2p-tester` .
+    - name: Stripping txg binary
+      run: strip txg
+    - name: Stripping mempool-p2p-tester binary
+      run: strip mempool-p2p-tester
+    - uses: actions/upload-artifact@v2
+      with:
+        name: txg-build-${{ matrix.os }}
+        path: txg
+
+    # Test
+    - name: Test
+      run: cabal v2-test

@@ -16,6 +16,7 @@
 --
 -- TODO
 --
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module TXG.Types
   ( -- * TXCmd
     TXCmd(..)
@@ -26,6 +27,7 @@ module TXG.Types
     -- * Timing
   , TimingDistribution(..)
   , Gaussian(..), Uniform(..)
+  , defaultTimingDist
     -- * Args
   , Args(..)
   , defaultArgs
@@ -66,6 +68,7 @@ import qualified Data.Text.Encoding as T
 import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
+import qualified Options.Applicative as O
 import           Pact.Parse
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
@@ -249,19 +252,21 @@ scriptConfigParser = id
       <> metavar "SECONDS"
       <> help "The time to live (in seconds) of each auto-generated transaction"
   where
+    read' :: Read a => String -> ReadM a
+    read' msg = eitherReader (bimap (const msg) id . readEither)
     parseGasLimit =
         GasLimit . ParsedInteger <$> read' @Integer "Cannot read gasLimit."
     parseGasPrice =
         GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
     parseTTL =
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
-    read' :: Read a => String -> ReadM a
-    read' msg = eitherReader (bimap (const msg) id . readEither)
-    pChainId = textOption cidFromText
-      % long "node-chain-id"
-      <> short 'i'
-      <> metavar "INT"
-      <> help "The specific chain that will receive generated transactions. Can be used multiple times."
+
+pChainId :: O.Parser ChainId
+pChainId = textOption cidFromText
+  % long "node-chain-id"
+  <> short 'i'
+  <> metavar "INT"
+  <> help "The specific chain that will receive generated transactions. Can be used multiple times."
 
 ------------
 -- TXG Monad
@@ -273,10 +278,10 @@ scriptConfigParser = id
 -- `lift` calls.
 
 -- | The principal application Monad for this Transaction Generator.
-newtype TXG m a = TXG { runTXG :: ReaderT TXGConfig (StateT TXGState m) a }
-  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadState TXGState, MonadReader TXGConfig)
+newtype TXG s m a = TXG { runTXG :: ReaderT TXGConfig (StateT s m) a }
+  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadState s, MonadReader TXGConfig)
 
-instance MonadTrans TXG where
+instance MonadTrans (TXG s) where
   lift = TXG . lift . lift
 
 data TXGState = TXGState
@@ -299,16 +304,20 @@ data TXGConfig = TXGConfig
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
-mkTXGConfig mdistribution config hostAddr =
-  TXGConfig mdistribution mempty
-  <$> pure hostAddr
-  <*> unsafeManager
-  <*> pure (nodeVersion config)
-  <*> pure (batchSize config)
-  <*> pure (verbose config)
-  <*> pure (gasLimit config)
-  <*> pure (gasPrice config)
-  <*> pure (timetolive config)
+mkTXGConfig mdistribution config hostAddr = do
+  mgr <- unsafeManager
+  pure $ TXGConfig
+    { confTimingDist = mdistribution
+    , confKeysets = mempty
+    , confHost = hostAddr
+    , confManager = mgr
+    , confVersion = nodeVersion config
+    , confBatchSize = batchSize config
+    , confVerbose = verbose config
+    , confGasLimit = gasLimit config
+    , confGasPrice = gasPrice config
+    , confTTL = timetolive config
+    }
 
 -- -------------------------------------------------------------------------- --
 -- MISC

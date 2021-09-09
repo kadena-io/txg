@@ -44,6 +44,7 @@ module TXG.Utils
 
 -- * Pact API
 , ClientError(..)
+, basePath
 , pactBasePath
 , mempoolBasePath
 , pactPost
@@ -256,8 +257,10 @@ mempoolPost mgr hostAddr v cid mempoolPath
     = post mgr hostAddr (mempoolBasePath v cid <> mempoolPath)
 
 chainBasePath :: ChainwebVersion -> ChainId -> T.Text
-chainBasePath v cid = "chainweb/0.0/" <> chainwebVersionToText v
-    <> "/chain/" <> cidToText cid
+chainBasePath v cid = basePath v <> "/chain/" <> cidToText cid
+
+basePath :: ChainwebVersion -> T.Text
+basePath v = "chainweb/0.0/" <> chainwebVersionToText v
 
 pactBasePath :: ChainwebVersion -> ChainId -> T.Text
 pactBasePath v cid = chainBasePath v cid <> "/pact/api/v1"

@@ -39,7 +39,7 @@ helloWorldContractLoader
     -> IO (Command Text)
 helloWorldContractLoader v meta adminKS = do
   let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
-  mkExec (T.unpack theCode) theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+  mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = [text|
 (module helloWorld 'admin-keyset
@@ -59,4 +59,4 @@ helloRequest :: ChainwebVersion -> Name -> IO (Command Text)
 helloRequest v (Name name) = mkExec theCode theData def [] (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theData = Null
-    theCode = printf "(helloWorld.hello \"%s\")" name
+    theCode = T.pack $ printf "(helloWorld.hello \"%s\")" name

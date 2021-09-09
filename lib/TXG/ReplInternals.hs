@@ -89,20 +89,20 @@ pactListen
 pactListen n rk = pactPostNetwork n "/listen" (ListenerRequest rk)
 
 cmd
-    :: String
+    :: Text
     -- ^ Code
     -> Value
     -- ^ Env data
     -> PublicMeta
     -> [SomeKeyPairCaps]
     -> Maybe NetworkId
-    -> Maybe String
+    -> Maybe Text
     -- ^ Transaction nonce.  If Nothing, then getCurrentTime is used.
     -> IO (Command Text)
 cmd = mkExec
 
 cmdStr :: String -> IO (Command Text)
-cmdStr str = cmd str Null defPubMeta [] Nothing Nothing
+cmdStr str = cmd (T.pack str) Null defPubMeta [] Nothing Nothing
 
 -- Structured transactions
 

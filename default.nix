@@ -6,8 +6,12 @@ let pkgs = kpkgs.pkgs;
 in haskellPackages.developPackage {
   name = builtins.baseNameOf ./.;
   root = kpkgs.gitignoreSource ./.;
-  overrides = self: super: with pkgs.haskell.lib;
-  {
+  overrides = self: super: with pkgs.haskell.lib; rec {
+    optparse-applicative = self.callHackageDirect {
+        pkg = "optparse-applicative";
+        ver = "0.15.1.0";
+        sha256 = "1mii408cscjvids2xqdcy2p18dvanb0qc0q1bi7234r23wz60ajk";
+    } {};
     base64 = self.callHackageDirect {
       pkg = "base64";
       ver = "0.4.2.3";
@@ -18,12 +22,19 @@ in haskellPackages.developPackage {
       ver = "4.11.0.0.10";
       sha256 = "1inrpb74i811k0gh8iazfqayrqrl86pwsm3zqgxn0aivxjh2ygsz";
     } {};
-    hostaddress = doJailbreak (self.callHackageDirect {
+    hostaddress = overrideCabal (enableCabalFlag (enableCabalFlag (doJailbreak (self.callHackageDirect {
       pkg = "hostaddress";
       ver = "0.1.0.0";
       sha256 = "13wqzkw32inc8v03vl94ibzxdy0hmiybch62c8rana38r4yn4fnl";
-    } {});
-    pact = dontCheck super.pact;
+    } {})) "with-configuration-tools") "with-aeson") (drv: {
+      librarySystemDepends = drv.librarySystemDepends or [] ++ [self.aeson self.configuration-tools optparse-applicative];
+    });
+    pact = enableCabalFlag (dontCheck super.pact) "build-tool";
+    sqlite-simple = self.callHackageDirect {
+      pkg = "sqlite-simple";
+      ver = "0.4.18.0";
+      sha256 = "1crp86argxqv5ryfiyj5v17a3wb8ngnb1zbhhx6d99i83skm5i86";
+    } {};
   };
   source-overrides = {
     chainweb-api = nix-thunk.thunkSource ./deps/chainweb-api;

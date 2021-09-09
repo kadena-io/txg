@@ -75,18 +75,18 @@ import           TXG.Types
 
 ---
 
-generateDelay :: MonadIO m => TXG m Int
+generateDelay :: MonadIO m => TXG TXGState m Int
 generateDelay = do
   distribution <- asks confTimingDist
   gen <- gets gsGen
   case distribution of
     Just (GaussianTD (Gaussian gmean gvar)) -> liftIO (truncate <$> normal gmean gvar gen)
-    Just (UniformTD (Uniform ulow uhigh)) -> liftIO (truncate <$> uniformR (ulow, uhigh) gen)
+    Just (UniformTD (Uniform ulow uhigh)) -> liftIO (truncate <$> System.Random.MWC.uniformR (ulow, uhigh) gen)
     Nothing -> error "generateDelay: impossible"
 
 generateSimpleTransactions
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  => TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
 generateSimpleTransactions = do
   -- Choose a Chain to send these transactions to, and cycle the state.
   cid <- NES.head <$> gets gsChains
@@ -127,7 +127,7 @@ generateSimpleTransactions = do
       let theData = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
       meta <- Sim.makeMeta cid ttl gp gl
       (Nothing,)
-        <$> mkExec theCode theData meta
+        <$> mkExec (T.pack theCode) theData meta
             (NEL.toList kps)
             (Just $ CI.NetworkId $ chainwebVersionToText v)
             Nothing
@@ -147,7 +147,7 @@ generateTransactions
     => Bool
     -> Verbose
     -> CmdChoice
-    -> TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+    -> TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
 generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
   -- Choose a Chain to send this transaction to, and cycle the state.
   cid <- NES.head <$> gets gsChains
@@ -272,8 +272,8 @@ isMempoolMember c cid = mempoolMember
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
-  -> TXG m ()
+  => TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  -> TXG TXGState m ()
 loop f = do
   (cid, msgs, transactions) <- f
   config <- ask
@@ -469,7 +469,7 @@ singleTransaction args host (SingleTX c cid)
       kps <- testSomeKeyPairs
       meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg)
       let v = confVersion cfg
-      cmd <- mkExec (T.unpack c) (datum kps) meta
+      cmd <- mkExec c (datum kps) meta
         (NEL.toList kps)
         (Just $ CI.NetworkId $ chainwebVersionToText v)
         Nothing
@@ -569,7 +569,7 @@ createLoader v (Sim.ContractName contractName) meta kp = do
           ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS
           , T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp
           ]
-  mkExec theCode theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
+  mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
 -- Remember that coin contract is already loaded.
 defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader
