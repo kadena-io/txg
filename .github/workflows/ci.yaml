@@ -64,6 +64,7 @@ jobs:
       with:
         name: txg-build-${{ matrix.os }}
         path: txg
+        path: mempool-p2p-tester
 
     # Test
     - name: Test
