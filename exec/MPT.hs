@@ -230,7 +230,7 @@ loop
   :: (MonadIO m, MonadLog T.Text m)
   => TVar Cut
   -> Int
-  -> FilePath
+  -> Text
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
 loop tcut confirmationDepth dbFile f = forever $ do
@@ -553,9 +553,9 @@ instance SQL.ToRow MempoolStat where
           TimeUntilConfirmationDepth (TimeSpan s' e') -> ("depth-confirmation", s', e')
 
 
-transmitMempoolStat :: FilePath -> MempoolStat -> IO ()
+transmitMempoolStat :: Text -> MempoolStat -> IO ()
 transmitMempoolStat dbFile ms =
-    SQL.withConnection dbFile $ \conn -> do
+    SQL.withConnection (T.unpack dbFile) $ \conn -> do
       SQL.execute conn insertStmt ms
   where
     insertStmt =
