@@ -82,18 +82,18 @@ instance ToJSON MPTArgs where
 
 instance FromJSON (MPTArgs -> MPTArgs) where
   parseJSON = withObject "MPTArgs" $ \o -> id
-    <$< field @"mpt_transferRate" ..: "mpt_transferRate" % o
-    <*< field @"mpt_accounts" ..: "mpt_accounts" % o
-    <*< field @"mpt_batchSize" ..: "mpt_batchSize" % o
-    <*< field @"mpt_confirmationDepth" ..: "mpt_confirmationDepth" % o
-    <*< field @"mpt_verbose" ..: "mpt_verbose" % o
-    <*< field @"mpt_gasLimit" ..: "mpt_gasLimit" % o
-    <*< field @"mpt_gasPrice" ..: "mpt_gasPrice" % o
-    <*< field @"mpt_timetolive" ..: "mpt_timetolive" % o
-    <*< field @"mpt_hostAddresses" ..: "mpt_hostAddresses" % o
-    <*< field @"mpt_nodeVersion" ..: "mpt_nodeVersion" % o
-    <*< field @"mpt_nodeChainIds" ..: "mpt_nodeChainIds" % o
-    <*< field @"mpt_dbFile" ..: "mpt_dbFile" % o
+    <$< field @"mpt_transferRate" ..: "transferRate" % o
+    <*< field @"mpt_accounts" ..: "accounts" % o
+    <*< field @"mpt_batchSize" ..: "batchSize" % o
+    <*< field @"mpt_confirmationDepth" ..: "confirmationDepth" % o
+    <*< field @"mpt_verbose" ..: "verbose" % o
+    <*< field @"mpt_gasLimit" ..: "gasLimit" % o
+    <*< field @"mpt_gasPrice" ..: "gasPrice" % o
+    <*< field @"mpt_timetolive" ..: "timetolive" % o
+    <*< field @"mpt_hostAddresses" ..: "hostAddresses" % o
+    <*< field @"mpt_nodeVersion" ..: "nodeVersion" % o
+    <*< field @"mpt_nodeChainIds" ..: "nodeChainIds" % o
+    <*< field @"mpt_dbFile" ..: "dbFile" % o
 
 defaultMPTArgs :: MPTArgs
 defaultMPTArgs = MPTArgs
@@ -118,10 +118,7 @@ mpt_scriptConfigParser = id
     % long "transfer-rate"
     <> metavar "INT"
     <> help "Number of microseconds to wait before sending next coin contract transfer transaction"
-  <*< field @"mpt_accounts" .:: option auto
-    % long "accounts"
-    <> metavar "STRING"
-    <> help "accounts name for transfers"
+  <*< field @"mpt_accounts" %:: pLeftSemigroupalUpdate (pure <$> pAccount)
   <*< field @"mpt_batchSize" .:: option auto
     % long "batch-size"
     <> short 'b'
@@ -167,6 +164,12 @@ mpt_scriptConfigParser = id
         GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
     parseTTL =
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
+
+pAccount :: O.Parser String
+pAccount = strOption
+  % long "account"
+  <> metavar "STRING"
+  <> help "account name for transfers"
 
 pChainId :: O.Parser ChainId
 pChainId = textOption cidFromText
