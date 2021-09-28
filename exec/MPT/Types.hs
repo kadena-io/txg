@@ -59,7 +59,7 @@ data MPTArgs = MPTArgs
   , mpt_hostAddresses     :: ![HostAddress]
   , mpt_nodeVersion       :: !ChainwebVersion
   , mpt_nodeChainIds      :: [ChainId]
-  , mpt_dbFile            :: FilePath
+  , mpt_dbFile            :: !T.Text
   } deriving (Show, Generic)
 
 
@@ -151,7 +151,7 @@ mpt_scriptConfigParser = id
       <> short 'v'
       <> metavar "VERSION"
       <> help "Chainweb Version"
-  <*< field @"mpt_dbFile" .:: option auto
+  <*< field @"mpt_dbFile" .:: strOption
     % long "db-file"
     <> metavar "FILEPATH"
     <> help "File name for sqlite database."
