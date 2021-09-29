@@ -104,15 +104,19 @@ worker :: MPTArgs -> IO ()
 worker config = do
     tv  <- newTVarIO 0
     mgr <- unsafeManager
-    res <- runExceptT $ do
-      ni <- ExceptT $ getNodeInfo mgr (head $ mpt_hostAddresses config)
-      cut <- withExceptT show $ ExceptT $ queryCut mgr (head $ mpt_hostAddresses config) ni
-      return (cut,ni)
-    (cut,ni) <- case res of
-          Left err -> die err
-          Right (cut,ni) -> pure (cut, ni)
+    let policy :: RetryPolicyM IO
+        policy = exponentialBackoff 250_000 <> limitRetries 3
+        toRetry _ = \case
+          Right _ -> return False
+          Left (ApiError RateLimiting _ _) -> return True
+          Left (ApiError MPT.Types.ClientError _ _) -> return False
+          Left (ApiError ServerError _ _) -> return True
+          Left (ApiError (OtherError _) _ _) -> return False
+    cut <- retrying policy toRetry (const $ queryCut mgr (head $ mpt_hostAddresses config) (mpt_nodeVersion config)) >>= \case
+        Right cut -> pure cut
+        Left err -> die $ "cut processing: " <> show err
     tcut <- newTVarIO cut
-    _ <- forkFinally (cutLoop mgr tcut (head $ mpt_hostAddresses config) ni) $ either throwIO pure
+    _ <- forkFinally (cutLoop mgr tcut (head $ mpt_hostAddresses config) (mpt_nodeVersion config)) $ either throwIO pure
     withLog $ \l -> forConcurrently_ (mpt_hostAddresses config) $ \host ->
       runLoggerT (act tv tcut host mgr) l
   where
@@ -125,10 +129,10 @@ worker config = do
       coinTransfers config mgr tv tcut host $ UniformTD (Uniform (fromIntegral $ mpt_transferRate config) (fromIntegral $ mpt_transferRate config))
 
 
-cutLoop :: Manager -> TVar Cut -> HostAddress -> NodeInfo -> IO ()
-cutLoop mgr tcut addr ni = forever $ do
+cutLoop :: Manager -> TVar Cut -> HostAddress -> ChainwebVersion -> IO ()
+cutLoop mgr tcut addr version = forever $ do
   threadDelay $ 60 * 1000000
-  ecut <- queryCut mgr addr ni
+  ecut <- queryCut mgr addr version
   cut <- case ecut of
     Left err -> die $ show err
     Right cut -> pure cut
@@ -180,12 +184,6 @@ handleRequest req mgr = do
 
 type BlockHeight = Int
 
-getNodeInfo :: Manager -> HostAddress -> IO (Either String NodeInfo)
-getNodeInfo m us = do
-  req <- parseRequest $ T.unpack $ "https://" <> hostAddressToText us <> "/info"
-  res <- httpLbs req m
-  pure $ eitherDecode' (responseBody res)
-
 data NodeInfo = NodeInfo
   { _nodeInfo_chainwebVer :: Text
   , _nodeInfo_apiVer      :: Text
@@ -210,10 +208,9 @@ instance FromJSON NodeInfo where
           Left ex -> fail (displayException ex)
           Right cids -> return (S.fromList cids)
 
-queryCut :: Manager -> HostAddress -> NodeInfo -> IO (Either ApiError Cut)
-queryCut mgr h ni = do
-  let v = _nodeInfo_chainwebVer ni
-      url = "https://" <> hostAddressToText h <> "/chainweb/0.0/" <> v <> "/cut"
+queryCut :: Manager -> HostAddress -> ChainwebVersion -> IO (Either ApiError Cut)
+queryCut mgr h version = do
+  let url = "https://" <> hostAddressToText h <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
   req <- parseRequest $ T.unpack url
   res <- handleRequest req mgr
   pure $ responseBody <$> res
@@ -234,7 +231,7 @@ loop
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
 loop tcut confirmationDepth dbFile f = forever $ do
-  liftIO $ threadDelay $ 60_000_000
+  liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
   (requestKeys, start, end) <- liftIO $ trackTime $ pactSend config cid transactions

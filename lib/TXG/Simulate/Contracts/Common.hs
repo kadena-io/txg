@@ -28,6 +28,7 @@ module TXG.Simulate.Contracts.Common
     -- * Generation
   , distinctPair
   , distinctPairSenders
+  , distinctPairsSendersOverList
     -- * Parsing
   , parseBytes
     -- * Utils
@@ -47,10 +48,12 @@ import qualified Data.ByteString.Char8 as B8
 import           Data.Char
 import           Data.Decimal
 import           Data.FileEmbed
+import           Data.Function (fix)
 import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NEL
 import           Data.Maybe
+import           Data.String
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Text.Encoding
@@ -135,7 +138,9 @@ safeCapitalize = fromMaybe [] . fmap (uncurry (:) . bimap toUpper (map toLower))
 names :: NEL.NonEmpty String
 names = NEL.map safeCapitalize . NEL.fromList $ words "mary elizabeth patricia jennifer linda barbara margaret susan dorothy jessica james john robert michael william david richard joseph charles thomas"
 
-newtype Account = Account { getAccount :: String } deriving (Eq, Ord, Show, Generic)
+newtype Account = Account { getAccount :: String }
+  deriving (Eq, Ord, Show, Generic)
+  deriving newtype IsString
 
 accountNames :: NEL.NonEmpty Account
 accountNames = NEL.map Account names
@@ -173,6 +178,16 @@ distinctPairSenders = fakeInt 0 9 >>= go
       m <- fakeInt 0 9
       if n == m then go n else return (append n, append m)
 
+distinctPairsSendersOverList :: [Account] -> FGen (Account, Account)
+distinctPairsSendersOverList xs@(_first:_second:_rest) = do
+    a <- elements xs
+    fix $ \loop -> do
+      b <- elements xs
+      if a /= b
+        then return (a,b)
+        else loop
+distinctPairsSendersOverList _ = fail "distinctPairSendersOverList: Please give at least two accounts!"
+
 -- hardcoded sender (sender00)
 makeMeta :: ChainId -> CM.TTLSeconds -> GasPrice -> GasLimit -> IO CM.PublicMeta
 makeMeta cid ttl gasPrice gasLimit = do
@@ -203,6 +218,7 @@ makeMetaWithSender sender ttl gasPrice gasLimit cid =
 newtype ContractName = ContractName { getContractName :: String }
   deriving (Eq, Ord, Show, Generic)
   deriving newtype Read
+  deriving newtype IsString
 
 instance ToJSON ContractName
 
