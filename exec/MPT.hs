@@ -231,7 +231,7 @@ loop
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
 loop tcut confirmationDepth dbFile f = forever $ do
-  liftIO $ threadDelay $ 60_000_000
+  liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
   (requestKeys, start, end) <- liftIO $ trackTime $ pactSend config cid transactions

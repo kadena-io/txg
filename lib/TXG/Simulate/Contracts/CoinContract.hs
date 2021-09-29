@@ -53,7 +53,7 @@ mkRandomCoinContractRequest transfersPred kacts = do
     pure $ case request of
       0 -> CoinAccountBalance <$> fake
       1 -> do
-          (from, to) <- distinctPairSenders
+          (from, to) <- distinctPairsSendersOverList (M.keys kacts)
           case M.lookup to kacts of
               Nothing -> error $ errmsg ++ getAccount to
               Just _keyset -> CoinTransfer
