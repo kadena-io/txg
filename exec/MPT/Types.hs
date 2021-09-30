@@ -45,6 +45,27 @@ import           TXG.Utils
 -- Args
 -------
 
+data ChainwebHost = ChainwebHost
+  {
+    cwh_hostname :: Hostname
+  , cwh_p2pPort :: Port
+  , cwh_servicePort :: Port
+  } deriving (Show, Generic)
+
+
+instance ToJSON ChainwebHost where
+  toJSON o = object
+    [
+      "hostname" .= cwh_hostname o
+    , "p2pPort" .= cwh_p2pPort o
+    , "servicePort" .= cwh_servicePort o
+    ]
+
+instance FromJSON ChainwebHost where
+  parseJSON = withObject "ChainwebHost" $ \o -> ChainwebHost
+    <$> o .: "hostname"
+    <*> o .: "p2pPort"
+    <*> o .: "servicePort"
 
 data MPTArgs = MPTArgs
   {
@@ -56,7 +77,7 @@ data MPTArgs = MPTArgs
   , mpt_gasLimit          :: GasLimit
   , mpt_gasPrice          :: GasPrice
   , mpt_timetolive        :: TTLSeconds
-  , mpt_hostAddresses     :: ![HostAddress]
+  , mpt_hosts     :: ![ChainwebHost]
   , mpt_nodeVersion       :: !ChainwebVersion
   , mpt_nodeChainIds      :: [ChainId]
   , mpt_dbFile            :: !T.Text
@@ -74,7 +95,7 @@ instance ToJSON MPTArgs where
     , "gasLimit"          .= mpt_gasLimit o
     , "gasPrice"          .= mpt_gasPrice o
     , "timetolive"        .= mpt_timetolive o
-    , "hostAddresses"     .= mpt_hostAddresses o
+    , "hosts"             .= mpt_hosts o
     , "nodeVersion"       .= mpt_nodeVersion o
     , "nodeChainIds"      .= mpt_nodeChainIds o
     , "dbFile"            .= mpt_dbFile o
@@ -90,7 +111,7 @@ instance FromJSON (MPTArgs -> MPTArgs) where
     <*< field @"mpt_gasLimit" ..: "gasLimit" % o
     <*< field @"mpt_gasPrice" ..: "gasPrice" % o
     <*< field @"mpt_timetolive" ..: "timetolive" % o
-    <*< field @"mpt_hostAddresses" ..: "hostAddresses" % o
+    <*< field @"mpt_hosts" ..: "hosts" % o
     <*< field @"mpt_nodeVersion" ..: "nodeVersion" % o
     <*< field @"mpt_nodeChainIds" ..: "nodeChainIds" % o
     <*< field @"mpt_dbFile" ..: "dbFile" % o
@@ -106,7 +127,7 @@ defaultMPTArgs = MPTArgs
   , mpt_gasLimit          = Sim.defGasLimit
   , mpt_gasPrice          = Sim.defGasPrice
   , mpt_timetolive        = Sim.defTTL
-  , mpt_hostAddresses     = mempty
+  , mpt_hosts     = mempty
   , mpt_nodeVersion       = Development
   , mpt_nodeChainIds       = []
   , mpt_dbFile          = "mpt-data.sql"
@@ -144,7 +165,7 @@ mpt_scriptConfigParser = id
       % long "time-to-live"
       <> metavar "SECONDS"
       <> help "The time to live (in seconds) of each auto-generated transaction"
-  <*< field @"mpt_hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
+  <*< field @"mpt_hosts" %:: pLeftSemigroupalUpdate (pure <$> pChainwebHost)
   <*< field @"mpt_nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
   <*< field @"mpt_nodeVersion" .:: textOption chainwebVersionFromText
       % long "chainweb-version"
@@ -164,6 +185,12 @@ mpt_scriptConfigParser = id
         GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
     parseTTL =
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
+
+pChainwebHost :: O.Parser ChainwebHost
+pChainwebHost = ChainwebHost
+  <$> pHostname Nothing
+  <*> pPort (Just "p2p")
+  <*> pPort (Just "service")
 
 pAccount :: O.Parser String
 pAccount = strOption
