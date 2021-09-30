@@ -112,24 +112,24 @@ worker config = do
           Left (ApiError MPT.Types.ClientError _ _) -> return False
           Left (ApiError ServerError _ _) -> return True
           Left (ApiError (OtherError _) _ _) -> return False
-    cut <- retrying policy toRetry (const $ queryCut mgr (head $ mpt_hostAddresses config) (mpt_nodeVersion config)) >>= \case
+    cut <- retrying policy toRetry (const $ queryCut mgr (head $ mpt_hosts config) (mpt_nodeVersion config)) >>= \case
         Right cut -> pure cut
         Left err -> die $ "cut processing: " <> show err
     tcut <- newTVarIO cut
-    _ <- forkFinally (cutLoop mgr tcut (head $ mpt_hostAddresses config) (mpt_nodeVersion config)) $ either throwIO pure
-    withLog $ \l -> forConcurrently_ (mpt_hostAddresses config) $ \host ->
+    _ <- forkFinally (cutLoop mgr tcut (head $ mpt_hosts config) (mpt_nodeVersion config)) $ either throwIO pure
+    withLog $ \l -> forConcurrently_ (mpt_hosts config) $ \host ->
       runLoggerT (act tv tcut host mgr) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
-    act :: TVar TXCount -> TVar Cut -> HostAddress -> Manager -> LoggerT T.Text IO ()
-    act tv tcut host@(HostAddress h p) mgr = localScope (const [(hostnameToText h, portToText p)]) $
+    act :: TVar TXCount -> TVar Cut -> ChainwebHost -> Manager -> LoggerT T.Text IO ()
+    act tv tcut host@(ChainwebHost h _ serviceP) mgr = localScope (const [(hostnameToText h, portToText serviceP)]) $
       coinTransfers config mgr tv tcut host $ UniformTD (Uniform (fromIntegral $ mpt_transferRate config) (fromIntegral $ mpt_transferRate config))
 
 
-cutLoop :: Manager -> TVar Cut -> HostAddress -> ChainwebVersion -> IO ()
+cutLoop :: Manager -> TVar Cut -> ChainwebHost -> ChainwebVersion -> IO ()
 cutLoop mgr tcut addr version = forever $ do
   threadDelay $ 60 * 1000000
   ecut <- queryCut mgr addr version
@@ -208,9 +208,9 @@ instance FromJSON NodeInfo where
           Left ex -> fail (displayException ex)
           Right cids -> return (S.fromList cids)
 
-queryCut :: Manager -> HostAddress -> ChainwebVersion -> IO (Either ApiError Cut)
-queryCut mgr h version = do
-  let url = "https://" <> hostAddressToText h <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
+queryCut :: Manager -> ChainwebHost -> ChainwebVersion -> IO (Either ApiError Cut)
+queryCut mgr (ChainwebHost h p2p _service) version = do
+  let url = "https://" <> hostnameToText h <> ":" <> portToText p2p <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
   req <- parseRequest $ T.unpack url
   res <- handleRequest req mgr
   pure $ responseBody <$> res
@@ -386,14 +386,14 @@ coinTransfers
    -> Manager
    -> TVar TXCount
    -> TVar Cut
-   -> HostAddress
+   -> ChainwebHost
    -> TimingDistribution
    -> LoggerT T.Text IO ()
 coinTransfers config manager tv tcut host distribution = do
     let cfg = TXGConfig
             { confTimingDist = Just distribution
             , confKeysets = mempty
-            , confHost = host
+            , confHost = HostAddress (cwh_hostname host) (cwh_servicePort host)
             , confManager = manager
             , confVersion = mpt_nodeVersion config
             , confBatchSize = mpt_batchSize config
