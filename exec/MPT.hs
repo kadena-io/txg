@@ -256,7 +256,7 @@ loop tcut confirmationDepth dbFile f = forever $ do
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
       let retrier = retrying policy (const (pure . isRight)) . const
           policy :: RetryPolicyM IO
-          policy = exponentialBackoff 250_000 <> limitRetries 3
+          policy = exponentialBackoff 50_000 <> limitRetries 10
       poll_result <- liftIO $ retrier $ pollRequestKeys config cid rks
       case poll_result of
         Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show rks) err
