@@ -30,7 +30,7 @@ import           Configuration.Utils hiding (Error, Lens')
 import           Control.Concurrent
 import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
-import           Control.Exception (displayException, throwIO)
+import           Control.Exception (catches, displayException, throwIO, Handler(..), SomeException(..))
 import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
@@ -40,14 +40,16 @@ import qualified Data.Aeson.Types as A
 import           Data.Aeson.Lens
 import qualified Data.ByteString.Lazy as LB
 import           Data.Generics.Product.Fields (field)
-import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
 import qualified Data.HashMap.Strict as HM
 import           Data.Int
+import           Data.IORef
+import           Data.List (delete)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import qualified Data.Map as M
+import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
 import qualified Data.Set as S
@@ -103,7 +105,9 @@ mainInfo =
 worker :: MPTArgs -> IO ()
 worker config = do
     tv  <- newTVarIO 0
+    trkeys <- newTVarIO $ M.fromList $ zip (mpt_nodeChainIds config) (repeat mempty)
     mgr <- unsafeManager
+    createMempoolStatTable (T.unpack $ mpt_dbFile config)
     let policy :: RetryPolicyM IO
         policy = exponentialBackoff 250_000 <> limitRetries 3
         toRetry _ = \case
@@ -117,16 +121,29 @@ worker config = do
         Left err -> die $ "cut processing: " <> show err
     tcut <- newTVarIO cut
     _ <- forkFinally (cutLoop mgr tcut (head $ mpt_hosts config) (mpt_nodeVersion config)) $ either throwIO pure
-    withLog $ \l -> forConcurrently_ (mpt_hosts config) $ \host ->
-      runLoggerT (act tv tcut host mgr) l
+    withLog $ \l -> forConcurrently_ (mpt_hosts config) $ \host -> do
+      let cfg = TXGConfig { confTimingDist = Just $ UniformTD (Uniform (fromIntegral $ mpt_transferRate config) (fromIntegral $ mpt_transferRate config))
+          , confKeysets = mempty
+          , confHost = HostAddress (cwh_hostname host) (cwh_servicePort host)
+          , confManager = mgr
+          , confVersion = mpt_nodeVersion config
+          , confBatchSize = mpt_batchSize config
+          , confVerbose = mpt_verbose config
+          , confGasLimit = mpt_gasLimit config
+          , confGasPrice = mpt_gasPrice config
+          , confTTL = mpt_timetolive config
+          }
+      cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
+      _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
+      runLoggerT (act tv tcut trkeys cfg) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
-    act :: TVar TXCount -> TVar Cut -> ChainwebHost -> Manager -> LoggerT T.Text IO ()
-    act tv tcut host@(ChainwebHost h _ serviceP) mgr = localScope (const [(hostnameToText h, portToText serviceP)]) $
-      coinTransfers config mgr tv tcut host $ UniformTD (Uniform (fromIntegral $ mpt_transferRate config) (fromIntegral $ mpt_transferRate config))
+    act :: TVar TXCount -> TVar Cut -> TVar PollMap -> TXGConfig -> LoggerT T.Text IO ()
+    act tv tcut trkeys cfg = localScope (const [(hostnameToText (_hostAddressHost $ confHost cfg), portToText (_hostAddressPort $ confHost cfg))]) $ do
+      coinTransfers config tv tcut trkeys cfg
 
 
 cutLoop :: Manager -> TVar Cut -> ChainwebHost -> ChainwebVersion -> IO ()
@@ -142,6 +159,57 @@ cutLoop mgr tcut addr version = forever $ do
     -- ASSUMPTION --
     writeTVar tcut cut
 
+inRequestKeys :: RequestKey -> RequestKeys -> Bool
+inRequestKeys rk (RequestKeys rks) = elem rk rks
+
+deleteRequestKey :: ChainId -> RequestKey -> PollMap -> PollMap
+deleteRequestKey cid rk = M.adjust (mapMaybe go) cid
+  where
+    go (ts, RequestKeys rks) =
+      case delete rk (NEL.toList rks) of
+        [] -> Nothing
+        rkss -> Just (ts, RequestKeys $ NEL.fromList rkss)
+
+pollLoop :: IORef (NESeq ChainId) -> Int -> T.Text -> Int -> TVar Cut -> TVar PollMap -> TXGConfig -> IO ()
+pollLoop cids confirmationDepth dbFile secondsDelay tcut trkeys config = forever $ do
+  threadDelay $ secondsDelay * 1000000
+  m <- readTVarIO trkeys
+  cid <- readIORef cids >>= pure . NES.head
+  modifyIORef cids rotate
+  case M.lookup cid m of
+    Nothing -> return ()
+    Just res -> do
+      let rkeys = RequestKeys $ foldr1 (<>) $ map (\(_, RequestKeys rks) -> rks) res
+      pollRequestKeys config cid rkeys >>= \resp -> do
+        case resp of
+          Left err -> printf "Caught this error while polling for these request keys (%s) %s\n" (show rkeys) err
+          Right (poll_start,poll_end,result) -> iforM_ result $ \rk json_res -> do
+              case find (inRequestKeys rk . snd) res of
+                Nothing -> throwIO $ userError "couldn't find time span for request key"
+                Just (ts,_) -> do
+                  atomically $ modifyTVar trkeys (deleteRequestKey cid rk)
+                  transmitMempoolStat dbFile $ MempoolStat
+                    {
+                      ms_chainid = cid
+                    , ms_txhash = rk
+                    , ms_stat = TimeUntilMempoolAcceptance ts
+                    }
+                  transmitMempoolStat dbFile $ MempoolStat
+                    {
+                      ms_chainid = cid
+                    , ms_txhash = rk
+                    , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
+                    }
+                  let h = fromIntegral $ fromJuste $ json_res ^? _2 . key "blockHeight" . _Integer
+                  cstart <- getCurrentTimeInt64
+                  withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
+                    cend <- wait a'
+                    transmitMempoolStat dbFile $ MempoolStat
+                      {
+                          ms_chainid = cid
+                      ,  ms_txhash = rk
+                      , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
+                      }
 
 mkMPTConfig
   :: Maybe TimingDistribution
@@ -225,12 +293,9 @@ loopUntilConfirmationDepth confirmationDepth cid startHeight tcut = do
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
-  => TVar Cut
-  -> Int
-  -> Text
-  -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  => TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
-loop tcut confirmationDepth dbFile f = forever $ do
+loop f = forever $ do
   liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
@@ -241,43 +306,14 @@ loop tcut confirmationDepth dbFile f = forever $ do
       lift . logg Error $ T.pack (show servantError)
     Right rks -> do
       countTV <- gets mptCounter
+      trkeys <- gets mptPollMap
       batch <- asks confBatchSize
       liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
       count <- liftIO $ readTVarIO countTV
       lift . logg Info $ "Transaction count: " <> T.pack (show count)
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
-      let retrier = retrying policy (const (pure . isRight)) . const
-          policy :: RetryPolicyM IO
-          policy = exponentialBackoff 250_000 <> limitRetries 3
-      poll_result <- liftIO $ retrier $ pollRequestKeys config cid rks
-      case poll_result of
-        Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show rks) err
-        Right (poll_start, poll_end, result) -> liftIO $ iforM_ result $ \rk res -> do
-            transmitMempoolStat dbFile $ MempoolStat
-              {
-                ms_chainid = cid
-              , ms_txhash = rk
-              , ms_stat = TimeUntilMempoolAcceptance (TimeSpan start end)
-              }
-            transmitMempoolStat dbFile $ MempoolStat
-              {
-                ms_chainid = cid
-              , ms_txhash = rk
-              , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
-              }
-            let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
-            cstart <- getCurrentTimeInt64
-            withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
-              cend <- wait a'
-              transmitMempoolStat dbFile $ MempoolStat
-                {
-                    ms_chainid = cid
-                ,  ms_txhash = rk
-                , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
-                }
-
-      forM_ (Compose msgs) $ \m ->
-        lift . logg Info $ "Actual transaction: " <> m
+      forM_ (Compose msgs) $ \m -> lift . logg Info $ "Actual transaction: " <> m
+      liftIO $ atomically $ modifyTVar trkeys (M.insertWith (<>) cid [(TimeSpan start end, rks)])
 
 versionChains :: ChainwebVersion -> NESeq Sim.ChainId
 versionChains = NES.fromList . NEL.fromList . chainIds
@@ -383,25 +419,12 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
 
 coinTransfers
   :: MPTArgs
-   -> Manager
    -> TVar TXCount
    -> TVar Cut
-   -> ChainwebHost
-   -> TimingDistribution
+   -> TVar PollMap
+   -> TXGConfig
    -> LoggerT T.Text IO ()
-coinTransfers config manager tv tcut host distribution = do
-    let cfg = TXGConfig
-            { confTimingDist = Just distribution
-            , confKeysets = mempty
-            , confHost = HostAddress (cwh_hostname host) (cwh_servicePort host)
-            , confManager = manager
-            , confVersion = mpt_nodeVersion config
-            , confBatchSize = mpt_batchSize config
-            , confVerbose = mpt_verbose config
-            , confGasLimit = mpt_gasLimit config
-            , confGasPrice = mpt_gasPrice config
-            , confTTL = mpt_timetolive config
-            }
+coinTransfers config tv tcut trkeys cfg = do
 
     let chains = maybe (versionChains (mpt_nodeVersion config)) NES.fromList
                   . NEL.nonEmpty
@@ -409,7 +432,7 @@ coinTransfers config manager tv tcut host distribution = do
 
     accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
       let f (Sim.Account sender) = do
-            meta <- liftIO (Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid)
+            !meta <- liftIO (Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid)
             Sim.createCoinAccount (confVersion cfg) meta sender
       (coinKS, _coinAcc) <-
         liftIO $ unzip <$> traverse f Sim.coinAccountNames
@@ -420,10 +443,10 @@ coinTransfers config manager tv tcut host distribution = do
 
     -- set up values for running the effect stack?
     gen <- liftIO createSystemRandom
-    let act = loop tcut (mpt_confirmationDepth config) (mpt_dbFile config) (generateTransactions True (mpt_verbose config) CoinContract)
+    let act = loop (generateTransactions True (mpt_verbose config) CoinContract)
         env = set (field @"confKeysets") accountMap cfg
           & over (field @"confKeysets") (fmap (M.filterWithKey (\(Sim.Account k) _ -> k `elem` (mpt_accounts config))))
-        stt = MPTState gen tv tcut chains
+        stt = MPTState gen tv tcut trkeys chains
 
     evalStateT (runReaderT (runTXG act) env) stt
   where
@@ -440,9 +463,10 @@ coinTransfers config manager tv tcut host distribution = do
     go name cks = (name, M.singleton (Sim.ContractName "coin") cks)
 
 pactSend
-  :: TXGConfig
+  :: Foldable f
+  => TXGConfig
   -> Sim.ChainId
-  -> NEL.NonEmpty (Command Text)
+  -> f (Command Text)
   -> IO (Either ClientError RequestKeys)
 pactSend c cid cmds = send
   (confManager c)
@@ -513,18 +537,13 @@ data MempoolStat = MempoolStat
     ms_chainid :: ChainId
   , ms_txhash :: RequestKey
   , ms_stat :: MempoolStat'
-  }
-
-data TimeSpan = TimeSpan
-  {
-    start_time :: Int64
-  , end_time :: Int64
-  }
+  } deriving Show
 
 data MempoolStat' =
   TimeUntilMempoolAcceptance TimeSpan
   | TimeUntilBlockInclusion TimeSpan
   | TimeUntilConfirmationDepth TimeSpan
+  deriving Show
 
 -- This is the current number of microseconds since unix epoch.
 getCurrentTimeInt64 :: IO Int64
@@ -551,9 +570,19 @@ instance SQL.ToRow MempoolStat where
 
 
 transmitMempoolStat :: Text -> MempoolStat -> IO ()
-transmitMempoolStat dbFile ms =
+transmitMempoolStat dbFile ms = do
     SQL.withConnection (T.unpack dbFile) $ \conn -> do
       SQL.execute conn insertStmt ms
+        `catches`
+        [
+          Handler $ \err@(SQL.SQLError sqlerr details context) -> case sqlerr of
+            SQL.ErrorConstraint -> do
+              putStrLn "Caught a constraint violation"
+              printf "Error context: %s\n" context
+              printf "Error details: %s\n" details
+            _ -> throwIO err
+        , Handler $ \e@(SomeException _) -> throwIO e
+        ]
   where
     insertStmt =
       "INSERT INTO mpt_stat (requestkey, chainid, stat_type, start_time, end_time) VALUES (?,?,?,?,?)"
@@ -562,9 +591,8 @@ createMempoolStatTable :: FilePath -> IO ()
 createMempoolStatTable dbFile =
   SQL.withConnection dbFile $ \conn ->
     SQL.execute_ conn "CREATE TABLE IF NOT EXISTS mpt_stat \
-                  \( requestkey VARCHAR PRIMARY KEY NOT NULL\
+                  \( requestkey VARCHAR NOT NULL\
                   \, chainid INTEGER NOT NULL\
                   \, stat_type VARCHAR NOT NULL\
                   \, start_time INTEGER NOT NULL\
                   \, end_time INTEGER NOT NULL)"
-
