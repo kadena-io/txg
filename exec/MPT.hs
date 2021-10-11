@@ -66,7 +66,6 @@ import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command
 import           Pact.Types.Exp (Literal(..))
 import           Pact.Types.Gas
-import qualified Pact.Types.Hash as H
 import           Pact.Types.Info (mkInfo)
 import           Pact.Types.Names
 import           Pact.Types.PactValue
@@ -560,7 +559,7 @@ trackTime act = do
   return (r,t1,t2)
 
 instance SQL.ToRow MempoolStat where
-  toRow (MempoolStat (ChainId cid) (RequestKey rk) ms) = SQL.toRow (H.unHash rk, cid, ty, s, e)
+  toRow (MempoolStat (ChainId cid) (RequestKey rk) ms) = SQL.toRow (show rk, cid, ty, s, e)
     where
       (ty,s,e) =
         case ms of

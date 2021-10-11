@@ -221,7 +221,7 @@ post mgr hostAddr urlPath body = do
   where
     req = defaultRequest
         { method = "POST"
-        , secure = True
+        , secure = False
         , host = T.encodeUtf8 $ hostnameToText $ _hostAddressHost hostAddr
         , port = fromIntegral $ _hostAddressPort hostAddr
         , path = T.encodeUtf8 urlPath
