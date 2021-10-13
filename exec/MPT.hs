@@ -58,6 +58,7 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Time.Clock.POSIX
 import qualified Database.SQLite.Simple as SQL
+import qualified Database.SQLite.Simple.ToField as SQL ()
 import           Fake (fake, generate)
 import           Network.HostAddress
 import           Pact.Types.API
@@ -104,7 +105,7 @@ mainInfo =
 worker :: MPTArgs -> IO ()
 worker config = do
     tv  <- newTVarIO 0
-    trkeys <- newTVarIO $ M.fromList $ zip (mpt_nodeChainIds config) (repeat mempty)
+    trkeys <- newTVarIO $ M.fromList $ zip (zipWith toNodeData [1..] (mpt_hosts config)) (repeat $ M.fromList $ zip (mpt_nodeChainIds config) (repeat mempty))
     mgr <- unsafeManager
     createMempoolStatTable (T.unpack $ mpt_dbFile config)
     let policy :: RetryPolicyM IO
@@ -120,6 +121,7 @@ worker config = do
         Left err -> die $ "cut processing: " <> show err
     tcut <- newTVarIO cut
     _ <- forkFinally (cutLoop mgr tcut (head $ mpt_hosts config) (mpt_nodeVersion config)) $ either throwIO pure
+    hostkey <- newIORef 0
     withLog $ \l -> forConcurrently_ (mpt_hosts config) $ \host -> do
       let cfg = TXGConfig { confTimingDist = Just $ UniformTD (Uniform (fromIntegral $ mpt_transferRate config) (fromIntegral $ mpt_transferRate config))
           , confKeysets = mempty
@@ -134,15 +136,17 @@ worker config = do
           }
       cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
       _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
-      runLoggerT (act tv tcut trkeys cfg) l
+      _key <- readIORef hostkey
+      atomicModifyIORef' hostkey (\i -> (i+1, ()))
+      runLoggerT (act _key tv tcut trkeys cfg) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
-    act :: TVar TXCount -> TVar Cut -> TVar PollMap -> TXGConfig -> LoggerT T.Text IO ()
-    act tv tcut trkeys cfg = localScope (const [(hostnameToText (_hostAddressHost $ confHost cfg), portToText (_hostAddressPort $ confHost cfg))]) $ do
-      coinTransfers config tv tcut trkeys cfg
+    act :: Integer -> TVar TXCount -> TVar Cut -> TVar PollMap -> TXGConfig -> LoggerT T.Text IO ()
+    act k tv tcut trkeys cfg = localScope (const [(hostnameToText (_hostAddressHost $ confHost cfg), portToText (_hostAddressPort $ confHost cfg))]) $ do
+      coinTransfers k config tv tcut trkeys cfg
 
 
 cutLoop :: Manager -> TVar Cut -> ChainwebHost -> ChainwebVersion -> IO ()
@@ -162,7 +166,7 @@ inRequestKeys :: RequestKey -> RequestKeys -> Bool
 inRequestKeys rk (RequestKeys rks) = elem rk rks
 
 deleteRequestKey :: ChainId -> RequestKey -> PollMap -> PollMap
-deleteRequestKey cid rk = M.adjust (mapMaybe go) cid
+deleteRequestKey cid rk m = M.adjust (mapMaybe go) cid <$> m
   where
     go (ts, RequestKeys rks) =
       case delete rk (NEL.toList rks) of
@@ -175,39 +179,43 @@ pollLoop cids confirmationDepth dbFile secondsDelay tcut trkeys config = forever
   m <- readTVarIO trkeys
   cid <- readIORef cids >>= pure . NES.head
   modifyIORef cids rotate
-  case M.lookup cid m of
-    Nothing -> return ()
-    Just res -> do
-      let rkeys = RequestKeys $ foldr1 (<>) $ map (\(_, RequestKeys rks) -> rks) res
-      pollRequestKeys config cid rkeys >>= \resp -> do
-        case resp of
-          Left err -> printf "Caught this error while polling for these request keys (%s) %s\n" (show rkeys) err
-          Right (poll_start,poll_end,result) -> iforM_ result $ \rk json_res -> do
-              case find (inRequestKeys rk . snd) res of
-                Nothing -> throwIO $ userError "couldn't find time span for request key"
-                Just (ts,_) -> do
-                  atomically $ modifyTVar trkeys (deleteRequestKey cid rk)
-                  transmitMempoolStat dbFile $ MempoolStat
-                    {
-                      ms_chainid = cid
-                    , ms_txhash = rk
-                    , ms_stat = TimeUntilMempoolAcceptance ts
-                    }
-                  transmitMempoolStat dbFile $ MempoolStat
-                    {
-                      ms_chainid = cid
-                    , ms_txhash = rk
-                    , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
-                    }
-                  let h = fromIntegral $ fromJuste $ json_res ^? _2 . key "blockHeight" . _Integer
-                  cstart <- getCurrentTimeInt64
-                  withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
-                    cend <- wait a'
+  forConcurrently_ (M.toList m) $ \(nd, m') ->
+    case M.lookup cid m' of
+      Nothing -> return ()
+      Just res -> do
+        let rkeys = RequestKeys $ foldr1 (<>) $ map (\(_, RequestKeys rks) -> rks) res
+        pollRequestKeys config cid rkeys >>= \resp -> do
+          case resp of
+            Left err -> printf "Caught this error while polling for these request keys (%s) %s\n" (show rkeys) err
+            Right (poll_start,poll_end,result) -> iforM_ result $ \rk json_res -> do
+                case find (inRequestKeys rk . snd) res of
+                  Nothing -> throwIO $ userError "couldn't find time span for request key"
+                  Just (ts,_) -> do
+                    atomically $ modifyTVar trkeys (deleteRequestKey cid rk)
                     transmitMempoolStat dbFile $ MempoolStat
                       {
-                          ms_chainid = cid
-                      ,  ms_txhash = rk
-                      , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
+                        ms_chainid = cid
+                      , ms_txhash = rk
+                      , ms_stat = TimeUntilMempoolAcceptance ts
+                      , ms_nodekey = nodeData_key nd
+                      }
+                    transmitMempoolStat dbFile $ MempoolStat
+                      {
+                        ms_chainid = cid
+                      , ms_txhash = rk
+                      , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
+                      , ms_nodekey = nodeData_key nd
+                      }
+                    let h = fromIntegral $ fromJuste $ json_res ^? _2 . key "blockHeight" . _Integer
+                    cstart <- getCurrentTimeInt64
+                    withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
+                      cend <- wait a'
+                      transmitMempoolStat dbFile $ MempoolStat
+                        {
+                            ms_chainid = cid
+                        ,  ms_txhash = rk
+                        , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
+                        , ms_nodekey = nodeData_key nd
                       }
 
 mkMPTConfig
@@ -292,9 +300,10 @@ loopUntilConfirmationDepth confirmationDepth cid startHeight tcut = do
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  => Integer
+  -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
-loop f = forever $ do
+loop k f = forever $ do
   liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
@@ -312,7 +321,9 @@ loop f = forever $ do
       lift . logg Info $ "Transaction count: " <> T.pack (show count)
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
       forM_ (Compose msgs) $ \m -> lift . logg Info $ "Actual transaction: " <> m
-      liftIO $ atomically $ modifyTVar trkeys (M.insertWith (<>) cid [(TimeSpan start end, rks)])
+      let nd = case confHost config of
+            HostAddress h p -> NodeData k (T.pack $ printf "%s:%s" (show h) (show p))
+      liftIO $ atomically $ modifyTVar trkeys $ M.adjust (M.insertWith (<>) cid [(TimeSpan start end, rks)]) nd
 
 versionChains :: ChainwebVersion -> NESeq Sim.ChainId
 versionChains = NES.fromList . NEL.fromList . chainIds
@@ -417,13 +428,14 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         _ -> error "SimplePayments.CreateAccount code generation not supported"
 
 coinTransfers
-  :: MPTArgs
+  :: Integer
+   -> MPTArgs
    -> TVar TXCount
    -> TVar Cut
    -> TVar PollMap
    -> TXGConfig
    -> LoggerT T.Text IO ()
-coinTransfers config tv tcut trkeys cfg = do
+coinTransfers k config tv tcut trkeys cfg = do
 
     let chains = maybe (versionChains (mpt_nodeVersion config)) NES.fromList
                   . NEL.nonEmpty
@@ -442,9 +454,9 @@ coinTransfers config tv tcut trkeys cfg = do
 
     -- set up values for running the effect stack?
     gen <- liftIO createSystemRandom
-    let act = loop (generateTransactions True (mpt_verbose config) CoinContract)
+    let act = loop k (generateTransactions True (mpt_verbose config) CoinContract)
         env = set (field @"confKeysets") accountMap cfg
-          & over (field @"confKeysets") (fmap (M.filterWithKey (\(Sim.Account k) _ -> k `elem` (mpt_accounts config))))
+          & over (field @"confKeysets") (fmap (M.filterWithKey (\(Sim.Account _k) _ -> _k `elem` (mpt_accounts config))))
         stt = MPTState gen tv tcut trkeys chains
 
     evalStateT (runReaderT (runTXG act) env) stt
@@ -533,9 +545,10 @@ THIS SCRIPT NEEDS TO TRACK THESE TIMES
 
 data MempoolStat = MempoolStat
   {
-    ms_chainid :: ChainId
-  , ms_txhash :: RequestKey
-  , ms_stat :: MempoolStat'
+    ms_chainid :: !ChainId
+  , ms_txhash :: !RequestKey
+  , ms_stat :: !MempoolStat'
+  , ms_nodekey :: !Integer
   } deriving Show
 
 data MempoolStat' =
@@ -559,14 +572,13 @@ trackTime act = do
   return (r,t1,t2)
 
 instance SQL.ToRow MempoolStat where
-  toRow (MempoolStat (ChainId cid) (RequestKey rk) ms) = SQL.toRow (show rk, cid, ty, s, e)
+  toRow (MempoolStat (ChainId cid) (RequestKey rk) ms nodekey) = SQL.toRow (show rk, cid, ty, s, e, nodekey)
     where
       (ty,s,e) =
         case ms of
           TimeUntilMempoolAcceptance (TimeSpan s' e') -> ("mempool-inclusion" :: Text, s', e')
           TimeUntilBlockInclusion (TimeSpan s' e')    -> ("block-inclusion", s', e')
           TimeUntilConfirmationDepth (TimeSpan s' e') -> ("depth-confirmation", s', e')
-
 
 transmitMempoolStat :: Text -> MempoolStat -> IO ()
 transmitMempoolStat dbFile ms = do
@@ -584,7 +596,12 @@ transmitMempoolStat dbFile ms = do
         ]
   where
     insertStmt =
-      "INSERT INTO mpt_stat (requestkey, chainid, stat_type, start_time, end_time) VALUES (?,?,?,?,?)"
+      "INSERT INTO mpt_stat (requestkey, chainid, stat_type, start_time, end_time, node_key) VALUES (?,?,?,?,?)"
+
+createNodeTable :: FilePath -> IO ()
+createNodeTable dbFile = do
+  SQL.withConnection dbFile $ \conn ->
+    SQL.execute_ conn "CREATE TABLE IF NOT EXISTS node (key INTEGER NOT NULL, name VARCHAR, PRIMARY KEY (key))"
 
 createMempoolStatTable :: FilePath -> IO ()
 createMempoolStatTable dbFile =
@@ -594,4 +611,6 @@ createMempoolStatTable dbFile =
                   \, chainid INTEGER NOT NULL\
                   \, stat_type VARCHAR NOT NULL\
                   \, start_time INTEGER NOT NULL\
-                  \, end_time INTEGER NOT NULL)"
+                  \, end_time INTEGER NOT NULL\
+                  \, node_key INTEGER NOT NULL)"
+
