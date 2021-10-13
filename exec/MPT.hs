@@ -107,6 +107,7 @@ worker config = do
     tv  <- newTVarIO 0
     trkeys <- newTVarIO $ M.fromList $ zip (zipWith toNodeData [1..] (mpt_hosts config)) (repeat $ M.fromList $ zip (mpt_nodeChainIds config) (repeat mempty))
     mgr <- unsafeManager
+    createNodeTable (T.unpack $ mpt_dbFile config)
     createMempoolStatTable (T.unpack $ mpt_dbFile config)
     let policy :: RetryPolicyM IO
         policy = exponentialBackoff 250_000 <> limitRetries 3
