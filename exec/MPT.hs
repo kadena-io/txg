@@ -105,9 +105,11 @@ mainInfo =
 worker :: MPTArgs -> IO ()
 worker config = do
     tv  <- newTVarIO 0
-    trkeys <- newTVarIO $ M.fromList $ zip (zipWith toNodeData [1..] (mpt_hosts config)) (repeat $ M.fromList $ zip (mpt_nodeChainIds config) (repeat mempty))
+    let nds = zipWith toNodeData [0..] (mpt_hosts config)
+    trkeys <- newTVarIO $ M.fromList $ zip nds (repeat $ M.fromList $ zip (mpt_nodeChainIds config) (repeat mempty))
     mgr <- unsafeManager
     createNodeTable (T.unpack $ mpt_dbFile config)
+    mapM_ (registerNode $ mpt_dbFile config) nds
     createMempoolStatTable (T.unpack $ mpt_dbFile config)
     let policy :: RetryPolicyM IO
         policy = exponentialBackoff 250_000 <> limitRetries 3
@@ -166,8 +168,8 @@ cutLoop mgr tcut addr version = forever $ do
 inRequestKeys :: RequestKey -> RequestKeys -> Bool
 inRequestKeys rk (RequestKeys rks) = elem rk rks
 
-deleteRequestKey :: ChainId -> RequestKey -> PollMap -> PollMap
-deleteRequestKey cid rk m = M.adjust (mapMaybe go) cid <$> m
+deleteRequestKey :: ChainId -> RequestKey -> NodeData -> PollMap -> PollMap
+deleteRequestKey cid rk nd m = M.adjust (M.adjust (mapMaybe go) cid) nd m
   where
     go (ts, RequestKeys rks) =
       case delete rk (NEL.toList rks) of
@@ -180,7 +182,8 @@ pollLoop cids confirmationDepth dbFile secondsDelay tcut trkeys config = forever
   m <- readTVarIO trkeys
   cid <- readIORef cids >>= pure . NES.head
   modifyIORef cids rotate
-  forConcurrently_ (M.toList m) $ \(nd, m') ->
+  forM_ (M.toList m) $ \(nd, m') -> do
+    putStrLn $ "current node: " <> show (nodeData_name nd)
     case M.lookup cid m' of
       Nothing -> return ()
       Just res -> do
@@ -192,7 +195,7 @@ pollLoop cids confirmationDepth dbFile secondsDelay tcut trkeys config = forever
                 case find (inRequestKeys rk . snd) res of
                   Nothing -> throwIO $ userError "couldn't find time span for request key"
                   Just (ts,_) -> do
-                    atomically $ modifyTVar trkeys (deleteRequestKey cid rk)
+                    atomically $ modifyTVar trkeys (deleteRequestKey cid rk nd)
                     transmitMempoolStat dbFile $ MempoolStat
                       {
                         ms_chainid = cid
@@ -581,9 +584,29 @@ instance SQL.ToRow MempoolStat where
           TimeUntilBlockInclusion (TimeSpan s' e')    -> ("block-inclusion", s', e')
           TimeUntilConfirmationDepth (TimeSpan s' e') -> ("depth-confirmation", s', e')
 
+registerNode :: Text -> NodeData -> IO ()
+registerNode dbFile nd = do
+    SQL.withConnection (T.unpack dbFile) $ \conn -> do
+      putStrLn $ "writing node data: " <> show nd
+      SQL.execute conn insertStmt nd
+        `catches`
+        [
+          Handler $ \err@(SQL.SQLError sqlerr details context) -> case sqlerr of
+            SQL.ErrorConstraint -> do
+              putStrLn "Caught a constraint violation"
+              printf "Error context: %s\n" context
+              printf "Error details: %s\n" details
+            _ -> throwIO err
+        , Handler $ \e@(SomeException _) -> throwIO e
+        ]
+  where
+    insertStmt =
+      "INSERT INTO node (key,name) VALUES (?,?)"
+
 transmitMempoolStat :: Text -> MempoolStat -> IO ()
 transmitMempoolStat dbFile ms = do
     SQL.withConnection (T.unpack dbFile) $ \conn -> do
+      putStrLn $ "writing mempool stat: " <> show ms
       SQL.execute conn insertStmt ms
         `catches`
         [
@@ -597,7 +620,7 @@ transmitMempoolStat dbFile ms = do
         ]
   where
     insertStmt =
-      "INSERT INTO mpt_stat (requestkey, chainid, stat_type, start_time, end_time, node_key) VALUES (?,?,?,?,?)"
+      "INSERT INTO mpt_stat (requestkey, chainid, stat_type, start_time, end_time, node_key) VALUES (?,?,?,?,?,?)"
 
 createNodeTable :: FilePath -> IO ()
 createNodeTable dbFile = do
