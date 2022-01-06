@@ -32,6 +32,7 @@ import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Data.Generics.Product.Fields (field)
+import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
 import qualified Data.List.NonEmpty as NEL
@@ -141,6 +142,73 @@ data CmdChoice = CoinContract | HelloWorld | Payments
 
 randomEnum :: forall a. (Enum a, Bounded a) => IO a
 randomEnum = toEnum <$> randomRIO @Int (0, fromEnum $ maxBound @a)
+
+generateXChainTransactions
+    :: forall m. (MonadIO m, MonadLog T.Text m)
+    => Verbose
+    -> TXG TXGState m (Sim.ChainId, Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+generateXChainTransactions isVerbose = do
+  -- Choose a source Chain to send this transaction to, and cycle the state.
+  sourceChain <- NES.head <$> gets gsChains
+  field @"gsChains" %= rotate
+
+  -- Choose a target Chain to send this transaction to, and cycle the state.
+  targetChain <- NES.head <$> gets gsChains
+  field @"gsChains" %= rotate
+
+  cks <- asks confKeysets
+  version <- asks confVersion
+  case M.lookup sourceChain cks of
+    Nothing -> error $ printf "Source Chain (%s) is missing Accounts!" (show sourceChain)
+    Just accs -> do
+      BatchSize batch <- asks confBatchSize
+      tGasLimit <- asks confGasLimit
+      tGasPrice <- asks confGasPrice
+      tTTL <- asks confTTL
+      (mmsgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $
+          xChainTransfer tGasLimit tGasPrice tTTL version isVerbose sourceChain targetChain $ accounts "coin" accs
+      generateDelay >>= liftIO . threadDelay
+      pure (sourceChain, targetChain, mmsgs, cmds)
+  where
+    accounts :: String -> Map Sim.Account (Map Sim.ContractName a) -> Map Sim.Account a
+    accounts s = fromJuste . traverse (M.lookup (Sim.ContractName s))
+
+    xChainTransfer
+        :: GasLimit
+        -> GasPrice
+        -> CM.TTLSeconds
+        -> ChainwebVersion
+        -> Verbose
+        -> Sim.ChainId
+        -> Sim.ChainId
+        -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
+        -> IO (Maybe Text, Command Text)
+    xChainTransfer gl gp ttl version (Verbose vb) sourceChain targetChain coinaccts = do
+      coinContractRequest <- mkRandomCoinContractRequest True coinaccts >>= generate
+      let msg = if vb then Just $ T.pack (show coinContractRequest) else Nothing
+      let acclookup sn@(Sim.Account accsn) =
+            case M.lookup sn coinaccts of
+              Just ks -> (sn, ks)
+              Nothing -> error $ "Couldn't find account: <" ++ accsn ++ ">"
+      let (Sim.Account sender, ks) =
+            case coinContractRequest of
+              CoinCreateAccount account (Guard guardd) -> (account, guardd)
+              CoinAccountBalance account -> acclookup account
+              CoinTransfer (SenderName sn) rcvr amt ->
+                mkTransferCaps rcvr amt $ acclookup sn
+              CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
+                mkTransferCaps rcvr amt (acc, guardd)
+      meta <- Sim.makeMetaWithSender sender ttl gp gl sourceChain
+      (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
+
+    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
+    mkTransferCaps (ReceiverName (Sim.Account r)) (Sim.Amount m) (s@(Sim.Account ss),ks) = (s, (caps <$) <$> ks)
+      where caps = [gas,tfr]
+            gas = SigCapability (QualifiedName "coin" "GAS" (mkInfo "coin.GAS")) []
+            tfr = SigCapability (QualifiedName "coin" "TRANSFER" (mkInfo "coin.TRANSFER"))
+                  [ PLiteral $ LString $ T.pack ss
+                  , PLiteral $ LString $ T.pack r
+                  , PLiteral $ LDecimal m]
 
 generateTransactions
     :: forall m. (MonadIO m, MonadLog T.Text m)
@@ -259,6 +327,17 @@ pactListen c cid = listen
   (confVersion c)
   cid
 
+pactSPV
+    :: TXGConfig
+    -> Sim.ChainId
+    -> RequestKey
+    -> IO  (Either ClientError Text)
+pactSPV c targetChain = spv
+  (confManager c)
+  (confHost c)
+  (confVersion c)
+  targetChain
+
 isMempoolMember
   :: TXGConfig
   -> Sim.ChainId
@@ -269,6 +348,61 @@ isMempoolMember c cid = mempoolMember
   (confHost c)
   (confVersion c)
   cid
+
+xChainLoop
+  :: (MonadIO m, MonadLog T.Text m)
+  => TXG TXGState m (Sim.ChainId, Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  -> TXG TXGState m ()
+xChainLoop f = forever $ do
+  (sourceChain, targetChain, msgs, transactions) <- f
+  config <- ask
+  requestKeys <- liftIO $ pactSend config sourceChain transactions
+
+  case requestKeys of
+    Left servantError ->
+      lift . logg Error $ T.pack (show servantError)
+    Right rks -> do
+      -- countTV <- gets gsCounter
+      -- batch <- asks confBatchSize
+      -- liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
+      -- count <- liftIO $ readTVarIO countTV
+      -- lift . logg Info $ "Transaction count: " <> T.pack (show count)
+      -- lift . logg Info $ "Transaction requestKey: " <> T.pack (show rk)
+      -- forM_ (Compose msgs) $ \m ->
+      --   lift . logg Info $ "Actual transaction: " <> m
+    -- there are some more steps
+      void $ do
+    -- 2) with request key, poll nodes for continuation on source chain
+        conts <- liftIO (pactPoll config sourceChain rks)
+                 >>= \case
+                    Left cerr -> undefined
+                    Right (PollResponses polls) ->
+                       forM polls $ \cr ->
+                          return $ case _crContinuation cr of
+                            Nothing -> Left ("Result was not a continuation\n" <> (show (_crResult cr)))
+                            Just pe -> Right (_crReqKey cr, pe)
+
+    -- 3) get spv proof with okCont from source chain
+        proofs <-  liftIO $ forM (rights $ toList conts) $ \(rk,pe) ->
+          pactSPV config targetChain rk >>= \case
+            Left err -> return $ Left $ show err
+            Right proof -> return $ Right (pe, proof)
+        -- proofs :: (NEL.NonEmpty Text) <- ExceptT $ liftIO $ fmap sequence $ mapM (\(rk, pe) -> pactSPV config targetChain rk) conts
+    -- assume gas payer is same as sender
+    -- 4) run continuation from spv proof on target chain
+        let sender = undefined
+            meta = undefined
+        payloads <- undefined
+        xconts <- undefined
+        xRequestKeys <- liftIO $ pactSend config targetChain $ xconts
+        countTV <- gets gsCounter
+        batch <- asks confBatchSize
+        liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
+        count <- liftIO $ readTVarIO countTV
+        lift . logg Info $ "Transaction count: " <> T.pack (show count)
+        lift . logg Info $ "Transaction request keys: " <> T.pack (show xRequestKeys)
+
+
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
@@ -365,6 +499,49 @@ realTransactions config host tv distribution = do
       where
         ps = (Sim.ContractName "payment", pks)
         cs = (Sim.ContractName "coin", cks)
+
+realXChainCoinTransactions
+  :: Args
+  -> HostAddress
+  -> TVar TXCount
+  -> TimingDistribution
+  -> LoggerT T.Text IO ()
+realXChainCoinTransactions config host tv distribution = do
+    when (null $ drop 1 $ nodeChainIds config) $ fail "You must specify at least 2 chains for cross-chain transfers"
+    cfg <- liftIO $ mkTXGConfig (Just distribution) config host
+    let chains = maybe (versionChains $ nodeVersion config) NES.fromList
+                . NEL.nonEmpty
+                $ nodeChainIds config
+    accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
+      let f (Sim.Account sender) = do
+            meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid
+            Sim.createCoinAccount (confVersion cfg) meta sender
+      (coinKS, _coinAcc) <-
+          liftIO $ unzip <$> traverse f Sim.coinAccountNames
+      let accounts = buildGenAccountsKeysets (NEL.fromList Sim.coinAccountNames) (NEL.fromList coinKS)
+      pure (cid, accounts)
+
+    logg Info "Real Transactions: Transactions are being generated"
+
+    -- Set up values for running the effect stack.
+    gen <- liftIO createSystemRandom
+    let act = xChainLoop (generateXChainTransactions (verbose config))
+        env = set (field @"confKeysets") accountMap cfg
+        stt = TXGState gen tv chains
+
+    evalStateT (runReaderT (runTXG act) env) stt
+  where
+    buildGenAccountsKeysets
+      :: NEL.NonEmpty Sim.Account
+      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+    buildGenAccountsKeysets accs cks =
+      M.fromList . NEL.toList $ NEL.zipWith go accs cks
+
+    go :: Sim.Account
+       -> NEL.NonEmpty SomeKeyPairCaps
+       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+    go name cks = (name, M.singleton (Sim.ContractName "coin") cks)
 
 realCoinTransactions
   :: Args
@@ -520,6 +697,8 @@ work cfg = do
           realTransactions cfg host tv distribution
         RunCoinContract distribution ->
           realCoinTransactions cfg host tv distribution
+        RunXChainTransfer distribution ->
+          realXChainCoinTransactions cfg host tv distribution
         RunSimpleExpressions distribution ->
           simpleExpressions cfg host tv distribution
         PollRequestKeys rk -> liftIO $ pollRequestKeys cfg host

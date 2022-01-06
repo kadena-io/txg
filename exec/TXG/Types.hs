@@ -101,6 +101,7 @@ data TXCmd
   = DeployContracts [Sim.ContractName]
   | RunStandardContracts TimingDistribution
   | RunCoinContract TimingDistribution
+  | RunXChainTransfer TimingDistribution
   | RunSimpleExpressions TimingDistribution
   | PollRequestKeys Text
   | ListenerRequestKey Text

@@ -54,6 +54,7 @@ module TXG.Utils
 , poll
 , listen
 , mempoolMember
+, spv
 ) where
 
 import Configuration.Utils
@@ -313,3 +314,15 @@ mempoolMember
     -> IO (Either ClientError [Bool])
 mempoolMember m a v c txh = mempoolPost m a v c "/member" txh
 
+spv
+    :: Manager
+    -> HostAddress
+    -> ChainwebVersion
+    -> ChainId
+    -> RequestKey
+    -> IO (Either ClientError T.Text)
+spv m a v c rk = pactPost m a v c "/spv" $ object
+  [
+    "requestKey" .= rk
+  , "targetChainId" .= c
+  ]
