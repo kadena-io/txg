@@ -83,6 +83,7 @@ executable txg
   build-depends:
     , async                >=2.2
     , generic-lens         >=1.1
+    , lens-aeson          >= 1.1
     , mwc-random           >=0.14
     , nonempty-containers  >=0.3
     , pretty-simple        >=2.2

@@ -41,8 +41,10 @@ module TXG.Types
   , ClientError(..)
   , unsafeManager
     -- * Misc.
+  , ChainwebHost(..)
   , TXCount(..)
   , BatchSize(..)
+  , DeployContractsArgs(..)
   , Verbose(..)
   , nelReplicate
   , nelZipWith3
@@ -97,8 +99,15 @@ data Uniform = Uniform { low :: !Double, high :: !Double }
 defaultTimingDist :: TimingDistribution
 defaultTimingDist = GaussianTD $ Gaussian 1000000 (1000000 / 16)
 
+data DeployContractsArgs =
+   DeployContractsArgs
+   {
+     sendTxsAtHeight :: Integer
+   , contractNames :: [Sim.ContractName]
+   } deriving (Eq, Show, Generic, FromJSON, ToJSON)
+
 data TXCmd
-  = DeployContracts [Sim.ContractName]
+  = DeployContracts DeployContractsArgs
   | RunStandardContracts TimingDistribution
   | RunCoinContract TimingDistribution
   | RunXChainTransfer TimingDistribution
@@ -159,11 +168,33 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 -- Args
 -------
 
+
+data ChainwebHost = ChainwebHost
+  {
+    cwh_hostname :: Hostname
+  , cwh_p2pPort :: Port
+  , cwh_servicePort :: Port
+  } deriving (Show, Generic)
+
+instance ToJSON ChainwebHost where
+  toJSON o = object
+    [
+      "hostname" .= cwh_hostname o
+    , "p2pPort" .= cwh_p2pPort o
+    , "servicePort" .= cwh_servicePort o
+    ]
+
+instance FromJSON ChainwebHost where
+  parseJSON = withObject "ChainwebHost" $ \o -> ChainwebHost
+    <$> o .: "hostname"
+    <*> o .: "p2pPort"
+    <*> o .: "servicePort"
+
 data Args = Args
   { scriptCommand   :: !TXCmd
   , nodeChainIds    :: ![ChainId]
   , isChainweb      :: !Bool
-  , hostAddresses   :: ![HostAddress]
+  , chainwebHosts   :: ![ChainwebHost]
   , nodeVersion     :: !ChainwebVersion
   , batchSize       :: !BatchSize
   , verbose         :: !Verbose
@@ -177,7 +208,7 @@ instance ToJSON Args where
     [ "scriptCommand"   .= scriptCommand o
     , "nodeChainIds"    .= nodeChainIds o
     , "isChainweb"      .= isChainweb o
-    , "hostAddresses"   .= hostAddresses o
+    , "chainwebHosts"   .= chainwebHosts o
     , "chainwebVersion" .= nodeVersion o
     , "batchSize"       .= batchSize o
     , "verbose"         .= verbose o
@@ -191,7 +222,7 @@ instance FromJSON (Args -> Args) where
     <$< field @"scriptCommand"   ..: "scriptCommand"   % o
     <*< field @"nodeChainIds"    ..: "nodeChainIds"    % o
     <*< field @"isChainweb"      ..: "isChainweb"      % o
-    <*< field @"hostAddresses"   ..: "hostAddresses"   % o
+    <*< field @"chainwebHosts"   ..: "chainwebHosts"   % o
     <*< field @"nodeVersion"     ..: "chainwebVersion" % o
     <*< field @"batchSize"       ..: "batchSize"       % o
     <*< field @"verbose"         ..: "verbose"         % o
@@ -204,7 +235,7 @@ defaultArgs = Args
   { scriptCommand   = RunSimpleExpressions defaultTimingDist
   , nodeChainIds    = []
   , isChainweb      = True
-  , hostAddresses   = []
+  , chainwebHosts   = []
   , nodeVersion     = v
   , batchSize       = BatchSize 1
   , verbose         = Verbose False
@@ -225,7 +256,7 @@ scriptConfigParser = id
       <> help ("The specific command to run: see examples/transaction-generator-help.md for more detail."
                <> "The only commands supported on the commandline are 'poll', 'listen', 'transfers', and 'simple'.")
   <*< field @"nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
-  <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
+  <*< field @"chainwebHosts" %:: pLeftSemigroupalUpdate (pure <$> pChainwebHost)
   <*< field @"nodeVersion" .:: textOption chainwebVersionFromText
       % long "chainweb-version"
       <> short 'v'
@@ -261,6 +292,12 @@ scriptConfigParser = id
         GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
     parseTTL =
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
+
+pChainwebHost :: O.Parser ChainwebHost
+pChainwebHost = ChainwebHost
+  <$> pHostname Nothing
+  <*> pPort (Just "p2p")
+  <*> pPort (Just "service")
 
 pChainId :: O.Parser ChainId
 pChainId = textOption cidFromText

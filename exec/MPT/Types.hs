@@ -51,27 +51,6 @@ import           TXG.Utils
 -- Args
 -------
 
-data ChainwebHost = ChainwebHost
-  {
-    cwh_hostname :: Hostname
-  , cwh_p2pPort :: Port
-  , cwh_servicePort :: Port
-  } deriving (Show, Generic)
-
-
-instance ToJSON ChainwebHost where
-  toJSON o = object
-    [
-      "hostname" .= cwh_hostname o
-    , "p2pPort" .= cwh_p2pPort o
-    , "servicePort" .= cwh_servicePort o
-    ]
-
-instance FromJSON ChainwebHost where
-  parseJSON = withObject "ChainwebHost" $ \o -> ChainwebHost
-    <$> o .: "hostname"
-    <*> o .: "p2pPort"
-    <*> o .: "servicePort"
 
 data MPTArgs = MPTArgs
   {

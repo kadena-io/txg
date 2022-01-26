@@ -31,7 +31,9 @@ import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
+import           Data.Aeson.Lens
 import           Data.Generics.Product.Fields (field)
+import qualified Data.ByteString.Lazy as LB
 import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
@@ -46,6 +48,8 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import           Fake (fake, generate)
 import           Network.HostAddress
+import           Network.HTTP.Client hiding (host)
+import           Network.HTTP.Types
 import           Pact.ApiReq
 import           Pact.Types.API
 import           Pact.Types.Capability
@@ -431,9 +435,9 @@ loop f = do
 type ContractLoader
     = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
 
-loadContracts :: Args -> HostAddress -> NEL.NonEmpty ContractLoader -> IO ()
-loadContracts config host contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl') <- mkTXGConfig Nothing config host
+loadContracts :: Args -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
+loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl') <- mkTXGConfig Nothing config (HostAddress h service)
   forM_ (nodeChainIds config) $ \cid -> do
     !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
     ts <- testSomeKeyPairs
@@ -447,14 +451,72 @@ loadContracts config host contractLoaders = do
       ExceptT $ pactPoll conf cid rkeys
     withConsoleLogger Info . logg Info $ T.pack (show pollresponse)
 
+queryCut :: Manager -> HostAddress -> ChainwebVersion -> IO (Either ApiError Cut)
+queryCut mgr (HostAddress h p) version = do
+  let url = "https://" <> hostnameToText h <> ":" <> portToText p <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
+  req <- parseRequest $ T.unpack url
+  res <- handleRequest req mgr
+  pure $ responseBody <$> res
+
+handleRequest :: Request -> Manager -> IO (Either ApiError (Response LB.ByteString))
+handleRequest req mgr = do
+  res <- httpLbs req mgr
+  let mkErr t = ApiError t (responseStatus res) (responseBody res)
+      checkErr s
+        | statusCode s == 429 || statusCode s == 403 = Left $ mkErr RateLimiting
+        | statusIsClientError s = Left $ mkErr EClientError
+        | statusIsServerError s = Left $ mkErr ServerError
+        | statusIsSuccessful s = Right res
+        | otherwise = Left $ mkErr $ OtherError "unknown error"
+  pure $ checkErr (responseStatus res)
+
+data ErrorType = RateLimiting | EClientError | ServerError | OtherError T.Text
+  deriving (Eq,Ord,Show)
+
+type Cut = LB.ByteString
+
+data ApiError = ApiError
+  { apiError_type :: ErrorType
+  , apiError_status :: Status
+  , apiError_body :: LB.ByteString
+  } deriving (Eq,Ord,Show)
+
+loadContractsAtHeight :: Args -> Integer -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
+loadContractsAtHeight config height (ChainwebHost host p2p service) contractLoaders = do
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl') <- mkTXGConfig Nothing config (HostAddress host service)
+  fix $ \fixloop -> do
+    -- query the latest cut
+    ecut <- queryCut (confManager conf) (HostAddress host p2p) (confVersion conf)
+    case ecut of
+      Left _ -> die "loadContractsAtHeight: Cannot query cut while attempting to load contracts"
+      Right cut -> do
+        let ChainId cid' = head $ nodeChainIds config
+        case cut ^? key "hashes" . key (T.pack $ show cid') . key "height" of
+          Just (Integer h) -> if h < height
+            then threadDelay 1000000 >> fixloop
+            else do
+              forM_ (nodeChainIds config) $ \cid -> do
+                !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
+                ts <- testSomeKeyPairs
+                contracts <- traverse (\f -> f meta ts) contractLoaders
+                pollresponse <- runExceptT $ do
+                  rkeys <- ExceptT $ pactSend conf cid contracts
+                  when vb
+                    $ withConsoleLogger Info
+                    $ logg Info
+                    $ "sent contracts with request key: " <> T.pack (show rkeys)
+                  ExceptT $ pactPoll conf cid rkeys
+                withConsoleLogger Info . logg Info $ T.pack (show pollresponse)
+          _ -> die "loadContractsAtHeight: malformed cut json"
+
 realTransactions
   :: Args
-  -> HostAddress
+  -> ChainwebHost
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-realTransactions config host tv distribution = do
-  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl') <- liftIO $ mkTXGConfig (Just distribution) config host
+realTransactions config (ChainwebHost h _p2p service) tv distribution = do
+  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl') <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
                . NEL.nonEmpty
@@ -502,13 +564,13 @@ realTransactions config host tv distribution = do
 
 realXChainCoinTransactions
   :: Args
-  -> HostAddress
+  -> ChainwebHost
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-realXChainCoinTransactions config host tv distribution = do
+realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
     when (null $ drop 1 $ nodeChainIds config) $ fail "You must specify at least 2 chains for cross-chain transfers"
-    cfg <- liftIO $ mkTXGConfig (Just distribution) config host
+    cfg <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
     let chains = maybe (versionChains $ nodeVersion config) NES.fromList
                 . NEL.nonEmpty
                 $ nodeChainIds config
@@ -545,12 +607,12 @@ realXChainCoinTransactions config host tv distribution = do
 
 realCoinTransactions
   :: Args
-  -> HostAddress
+  -> ChainwebHost
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-realCoinTransactions config host tv distribution = do
-  cfg <- liftIO $ mkTXGConfig (Just distribution) config host
+realCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
+  cfg <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
                . NEL.nonEmpty
@@ -592,13 +654,13 @@ versionChains = NES.fromList . NEL.fromList . chainIds
 
 simpleExpressions
   :: Args
-  -> HostAddress
+  -> ChainwebHost
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-simpleExpressions config host tv distribution = do
+simpleExpressions config (ChainwebHost h _p2p service) tv distribution = do
   logg Info "Simple Expressions: Transactions are being generated"
-  gencfg <- lift $ mkTXGConfig (Just distribution) config host
+  gencfg <- lift $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
@@ -609,9 +671,9 @@ simpleExpressions config host tv distribution = do
 
   evalStateT (runReaderT (runTXG (loop generateSimpleTransactions)) gencfg) stt
 
-pollRequestKeys :: Args -> HostAddress -> RequestKey -> IO ()
-pollRequestKeys config host rkey = do
-  cfg <- mkTXGConfig Nothing config host
+pollRequestKeys :: Args -> ChainwebHost -> RequestKey -> IO ()
+pollRequestKeys config (ChainwebHost h _p2p service) rkey = do
+  cfg <- mkTXGConfig Nothing config (HostAddress h service)
   response <- pactPoll cfg cid (RequestKeys $ pure rkey)
   case response of
     Left _ -> putStrLn "Failure" >> exitWith (ExitFailure 1)
@@ -624,9 +686,9 @@ pollRequestKeys config host rkey = do
     cid :: Sim.ChainId
     cid = fromMaybe 0 . listToMaybe $ nodeChainIds config
 
-listenerRequestKey :: Args -> HostAddress -> ListenerRequest -> IO ()
-listenerRequestKey config host (ListenerRequest rk) = do
-  cfg <- mkTXGConfig Nothing config host
+listenerRequestKey :: Args -> ChainwebHost -> ListenerRequest -> IO ()
+listenerRequestKey config (ChainwebHost h _p2p service) (ListenerRequest rk) = do
+  cfg <- mkTXGConfig Nothing config (HostAddress h service)
   pactListen cfg cid rk >>= \case
     Left err -> print err >> exitWith (ExitFailure 1)
     Right r -> print r >> exitSuccess
@@ -637,12 +699,12 @@ listenerRequestKey config host (ListenerRequest rk) = do
     cid = fromMaybe 0 . listToMaybe $ nodeChainIds config
 
 -- | Send a single transaction to the network, and immediately listen for its result.
-singleTransaction :: Args -> HostAddress -> SingleTX -> IO ()
-singleTransaction args host (SingleTX c cid)
+singleTransaction :: Args -> ChainwebHost -> SingleTX -> IO ()
+singleTransaction args (ChainwebHost h _p2p service) (SingleTX c cid)
   | not . elem cid . chainIds $ nodeVersion args =
     putStrLn "Invalid target ChainId" >> exitWith (ExitFailure 1)
   | otherwise = do
-      cfg <- mkTXGConfig Nothing args host
+      cfg <- mkTXGConfig Nothing args (HostAddress h service)
       kps <- testSomeKeyPairs
       meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg)
       let v = confVersion cfg
@@ -663,12 +725,12 @@ singleTransaction args host (SingleTX c cid)
       ExceptT $ pactListen cfg cid rk
 
 
-inMempool :: Args -> HostAddress -> (Sim.ChainId, [TransactionHash]) -> IO ()
-inMempool args host (cid, txhashes)
+inMempool :: Args -> ChainwebHost -> (Sim.ChainId, [TransactionHash]) -> IO ()
+inMempool args (ChainwebHost h _p2p service) (cid, txhashes)
     | not . elem cid . chainIds $ nodeVersion args =
       putStrLn "Invalid target ChainId" >> exitWith (ExitFailure 1)
     | otherwise = do
-        cfg <- mkTXGConfig Nothing args host
+        cfg <- mkTXGConfig Nothing args (HostAddress h service)
         isMempoolMember cfg cid txhashes >>= \case
           Left e -> print e >> exitWith (ExitFailure 1)
           Right res -> pPrintNoColor res
@@ -676,45 +738,45 @@ inMempool args host (cid, txhashes)
 work :: Args -> IO ()
 work cfg = do
   tv  <- newTVarIO 0
-  withLog $ \l -> forConcurrently_ (hostAddresses cfg) $ \host ->
-    runLoggerT (act tv host) l
+  withLog $ \l -> forConcurrently_ (chainwebHosts cfg) $ \chainwebHost ->
+    runLoggerT (act tv chainwebHost) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
 
-    act :: TVar TXCount -> HostAddress -> LoggerT T.Text IO ()
-    act tv host@(HostAddress h p) = localScope (const [(hostnameToText h, portToText p)]) $
+    act :: TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
+    act tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
       case scriptCommand cfg of
-        DeployContracts [] -> liftIO $ do
+        DeployContracts (DeployContractsArgs _ []) -> liftIO $ do
           let v = nodeVersion cfg
-          loadContracts cfg host $ NEL.cons (initAdminKeysetContract v) (defaultContractLoaders v)
-        DeployContracts cs -> liftIO $ do
+          loadContracts cfg chainwebHost $ NEL.cons (initAdminKeysetContract v) (defaultContractLoaders v)
+        DeployContracts (DeployContractsArgs height cs) -> liftIO $ do
           let v = nodeVersion cfg
-          loadContracts cfg host $ initAdminKeysetContract v NEL.:| map (createLoader v) cs
+          loadContractsAtHeight cfg height chainwebHost $ initAdminKeysetContract v NEL.:| map (createLoader v) cs
         RunStandardContracts distribution ->
-          realTransactions cfg host tv distribution
+          realTransactions cfg chainwebHost tv distribution
         RunCoinContract distribution ->
-          realCoinTransactions cfg host tv distribution
+          realCoinTransactions cfg chainwebHost tv distribution
         RunXChainTransfer distribution ->
-          realXChainCoinTransactions cfg host tv distribution
+          realXChainCoinTransactions cfg chainwebHost tv distribution
         RunSimpleExpressions distribution ->
-          simpleExpressions cfg host tv distribution
-        PollRequestKeys rk -> liftIO $ pollRequestKeys cfg host
+          simpleExpressions cfg chainwebHost tv distribution
+        PollRequestKeys rk -> liftIO $ pollRequestKeys cfg chainwebHost
           . RequestKey
           . H.Hash
           . T.encodeUtf8
           $ rk
-        ListenerRequestKey rk -> liftIO $ listenerRequestKey cfg host
+        ListenerRequestKey rk -> liftIO $ listenerRequestKey cfg chainwebHost
           . ListenerRequest
           . RequestKey
           . H.Hash
           . T.encodeUtf8
           $ rk
         SingleTransaction stx -> liftIO $
-          singleTransaction cfg host stx
-        MempoolMember req -> liftIO $ inMempool cfg host req
+          singleTransaction cfg chainwebHost stx
+        MempoolMember req -> liftIO $ inMempool cfg chainwebHost req
 
 
 main :: IO ()
