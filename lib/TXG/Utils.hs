@@ -204,9 +204,10 @@ post
     => Manager
     -> HostAddress
     -> T.Text
+    -> Bool
     -> body
     -> IO (Either ClientError result)
-post mgr hostAddr urlPath body = do
+post mgr hostAddr urlPath s body = do
     resp <- httpLbs req mgr
     return $ if statusIsSuccessful (responseStatus resp)
         then first (ClientError . T.pack)
@@ -222,7 +223,7 @@ post mgr hostAddr urlPath body = do
   where
     req = defaultRequest
         { method = "POST"
-        , secure = False
+        , secure = s
         , host = T.encodeUtf8 $ hostnameToText $ _hostAddressHost hostAddr
         , port = fromIntegral $ _hostAddressPort hostAddr
         , path = T.encodeUtf8 urlPath
@@ -242,7 +243,7 @@ pactPost
     -> body
     -> IO (Either ClientError result)
 pactPost mgr hostAddr v cid pactPath
-    = post mgr hostAddr (pactBasePath v cid <> pactPath)
+    = post mgr hostAddr (pactBasePath v cid <> pactPath) True
 
 mempoolPost
     :: ToJSON body
@@ -255,7 +256,7 @@ mempoolPost
     -> body
     -> IO (Either ClientError result)
 mempoolPost mgr hostAddr v cid mempoolPath
-    = post mgr hostAddr (mempoolBasePath v cid <> mempoolPath)
+    = post mgr hostAddr (mempoolBasePath v cid <> mempoolPath) False
 
 chainBasePath :: ChainwebVersion -> ChainId -> T.Text
 chainBasePath v cid = basePath v <> "/chain/" <> cidToText cid
