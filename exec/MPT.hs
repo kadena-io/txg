@@ -155,9 +155,16 @@ worker config = do
 cutLoop :: Manager -> TVar Cut -> ChainwebHost -> ChainwebVersion -> IO ()
 cutLoop mgr tcut addr version = forever $ do
   threadDelay $ 60 * 1000000
-  ecut <- queryCut mgr addr version
+  let policy = exponentialBackoff 250_000 <> limitRetries 3
+      toRetry _ = \case
+        Right _ -> return False
+        Left (ApiError RateLimiting _ _) -> return True
+        Left (ApiError MPT.Types.ClientError _ _) -> return False
+        Left (ApiError ServerError _ _) -> return True
+        Left (ApiError (OtherError _) _ _) -> return False
+  ecut <- retrying policy toRetry (const $ queryCut mgr addr version)
   cut <- case ecut of
-    Left err -> die $ show err
+    Left err -> throwIO $ userError $ show err
     Right cut -> pure cut
   atomically $
     -- ASSUMPTION --
@@ -311,6 +318,7 @@ loop k f = forever $ do
   liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
+  lift $ logg Info $ "The number of transactions we are sending " <> T.pack (show (length transactions))
   (requestKeys, start, end) <- liftIO $ trackTime $ pactSend config cid transactions
 
   case requestKeys of
@@ -324,10 +332,38 @@ loop k f = forever $ do
       count <- liftIO $ readTVarIO countTV
       lift . logg Info $ "Transaction count: " <> T.pack (show count)
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
-      forM_ (Compose msgs) $ \m -> lift . logg Info $ "Actual transaction: " <> m
-      let nd = case confHost config of
-            HostAddress h p -> NodeData k (T.pack $ printf "%s:%s" (show h) (show p))
-      liftIO $ atomically $ modifyTVar trkeys $ M.adjust (M.insertWith (<>) cid [(TimeSpan start end, rks)]) nd
+      let retrier = retrying policy (const (pure . isRight)) . const
+          policy :: RetryPolicyM IO
+          policy = exponentialBackoff 50_000 <> limitRetries 10
+      poll_result <- liftIO $ retrier $ pollRequestKeys config cid rks
+      case poll_result of
+        Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show rks) err
+        Right (poll_start, poll_end, result) -> liftIO $ iforM_ result $ \rk res -> do
+            transmitMempoolStat dbFile $ MempoolStat
+              {
+                ms_chainid = cid
+              , ms_txhash = rk
+              , ms_stat = TimeUntilMempoolAcceptance (TimeSpan start end)
+              }
+            transmitMempoolStat dbFile $ MempoolStat
+              {
+                ms_chainid = cid
+              , ms_txhash = rk
+              , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
+              }
+            let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
+            cstart <- getCurrentTimeInt64
+            withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
+              cend <- wait a'
+              transmitMempoolStat dbFile $ MempoolStat
+                {
+                    ms_chainid = cid
+                ,  ms_txhash = rk
+                , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
+                }
+
+      forM_ (Compose msgs) $ \m ->
+        lift . logg Info $ "Actual transaction: " <> m
 
 versionChains :: ChainwebVersion -> NESeq Sim.ChainId
 versionChains = NES.fromList . NEL.fromList . chainIds

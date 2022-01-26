@@ -243,7 +243,7 @@ pactPost
     -> body
     -> IO (Either ClientError result)
 pactPost mgr hostAddr v cid pactPath
-    = post mgr hostAddr (pactBasePath v cid <> pactPath) True
+    = post mgr hostAddr (pactBasePath v cid <> pactPath) False
 
 mempoolPost
     :: ToJSON body
