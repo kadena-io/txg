@@ -58,7 +58,7 @@ someED25519Pair =
 --     )
 
 decodeKey :: ByteString -> ByteString
-decodeKey = fst . B16.decode
+decodeKey = either (error "TXG.Simulate.Utils:decodeKey: decode failed") id . B16.decode
 
 initAdminKeysetContract
     :: ChainwebVersion
