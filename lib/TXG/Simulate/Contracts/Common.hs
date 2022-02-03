@@ -220,7 +220,9 @@ newtype ContractName = ContractName { getContractName :: String }
   deriving newtype Read
   deriving newtype IsString
   deriving newtype ToJSON
+  deriving newtype ToJSONKey
   deriving newtype FromJSON
+  deriving newtype FromJSONKey
 
 -- instance ToJSON ContractName
 

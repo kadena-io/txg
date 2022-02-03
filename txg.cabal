@@ -88,6 +88,7 @@ executable txg
     , nonempty-containers  >=0.3
     , pretty-simple        >=2.2
     , primitive            >=0.6
+    , string-conv         >=0.1
     , stm
     , txg
     , yet-another-logger   >=0.3

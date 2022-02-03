@@ -23,7 +23,7 @@
 
 module Main ( main ) where
 
-import           Configuration.Utils hiding (Error, Lens')
+import           Configuration.Utils hiding (many, Error, Lens')
 import           Control.Concurrent
 import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
@@ -32,17 +32,20 @@ import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Data.Aeson.Lens
+import           Data.Char (isAlphaNum)
 import           Data.Generics.Product.Fields (field)
 import qualified Data.ByteString.Lazy as LB
 import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
+import qualified Data.List as L
 import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
+import           Data.String.Conv (toS)
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -56,6 +59,8 @@ import           Pact.Types.Capability
 import qualified Pact.Types.ChainId as CI
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command
+import           Pact.Types.Crypto
+    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), SomeKeyPair)
 import           Pact.Types.Exp (Literal(..))
 import           Pact.Types.Gas
 import qualified Pact.Types.Hash as H
@@ -68,6 +73,7 @@ import           System.Exit
 import           System.Random
 import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
+import           Text.ParserCombinators.ReadP hiding (count)
 import           Text.Pretty.Simple (pPrintNoColor)
 import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
@@ -432,6 +438,9 @@ loop f = do
 
   loop f
 
+
+type LoadedKeyPairCaps = Map Text (NEL.NonEmpty SomeKeyPairCaps)
+
 type ContractLoader
     = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
 
@@ -749,12 +758,25 @@ work cfg = do
     act :: TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
     act tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
       case scriptCommand cfg of
-        DeployContracts (DeployContractsArgs _ []) -> liftIO $ do
+        DeployContracts (DeployContractsArgs _ m) | M.null m -> liftIO $ do
           let v = nodeVersion cfg
           loadContracts cfg chainwebHost $ NEL.cons (initAdminKeysetContract v) (defaultContractLoaders v)
-        DeployContracts (DeployContractsArgs height cs) -> liftIO $ do
+        DeployContracts (DeployContractsArgs height ckss) -> liftIO $ do
           let v = nodeVersion cfg
-          loadContractsAtHeight cfg height chainwebHost $ initAdminKeysetContract v NEL.:| map (createLoader v) cs
+          let mkKeysetMap :: [ContractKeyset] -> IO (Map Text (NEL.NonEmpty SomeKeyPairCaps))
+              mkKeysetMap cs = do
+                kvs <- traverse makeContractKeys cs
+                return $ M.fromList kvs
+              mkContractMap
+                :: Sim.ContractName
+                -> [ContractKeyset]
+                -> Map Sim.ContractName (Map Text (NEL.NonEmpty SomeKeyPairCaps))
+                -> IO (Map Sim.ContractName (Map Text (NEL.NonEmpty SomeKeyPairCaps)))
+              mkContractMap contractName ks m = do
+                ksm <- mkKeysetMap ks
+                return $ M.insert contractName ksm m
+          toLoad <- M.toList <$> ifoldrM mkContractMap mempty ckss
+          loadContractsAtHeight cfg height chainwebHost $ initAdminKeysetContract v NEL.:| map (\(c, m) -> createLoader v c m) toLoad
         RunStandardContracts distribution ->
           realTransactions cfg chainwebHost tv distribution
         RunCoinContract distribution ->
@@ -801,21 +823,64 @@ mainInfo =
 
 -- TODO: This function should also incorporate a user's keyset as well
 -- if it is given.
-createLoader :: ChainwebVersion -> Sim.ContractName -> ContractLoader
-createLoader v (Sim.ContractName contractName) meta kp = do
+createLoader :: ChainwebVersion -> Sim.ContractName -> LoadedKeyPairCaps -> ContractLoader
+createLoader v (Sim.ContractName contractName) m meta kp = do
   theCode <- readFile (contractName <> ".pact")
   adminKS <- testSomeKeyPairs
-  -- TODO: theData may change later
-  let theData = object
-          ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS
-          , T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp
-          ]
+  let theData = object $ if M.null m
+        then ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS
+              , T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp
+              ]
+        else M.foldrWithKey (\k ks b -> (k .= fmap (formatB16PubKey . fst) ks) : b) ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS] m
   mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
 -- Remember that coin contract is already loaded.
 defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader
 defaultContractLoaders v =
-  NEL.fromList [ helloWorldContractLoader v, simplePaymentsContractLoader v]
+    NEL.fromList [ \meta _ -> helloWorldContractLoader v meta undefined, \meta _ -> simplePaymentsContractLoader v meta undefined]
+
+makeContractKeys :: ContractKeyset -> IO (Text, NEL.NonEmpty SomeKeyPairCaps)
+makeContractKeys (ContractKeyset keysetName fps) = do
+    readKeys' <- traverse readKeys fps
+    (keysetName,) . NEL.fromList <$> (mkKeyPairs $ concatMap go readKeys')
+    -- return $ M.singleton (either (toS . Sim.getContractName) id contractName) $ NEL.fromList ys
+    -- & _
+    -- <&> NEL.fromList
+    -- <&> M.singleton (either (toS . Sim.getContractName) id contractName)
+  where
+    go (pub,priv,addr,scheme) = [ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing]
+    -- apiKeyPair (pub,priv,addr,scheme) = mkKeyPairs [ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing]
+
+
+readKeys :: FilePath -> IO (PublicKeyBS, PrivateKeyBS, Text, PPKScheme)
+readKeys fp = do
+    file <- readFile fp
+    let lastMaybe = foldl (const Just) Nothing
+        parsed = lastMaybe
+          $ fmap fst
+          $ filter (null . snd)
+          $ flip readP_to_S file
+          $ flip endBy1 (char '\n')
+          $ flip sepBy1 (char '\n')
+          $ choice [parseKey "public", parseKey "secret", parseKey "address"]
+    case concat <$> parsed of
+      Nothing -> error "failed to read keys"
+      Just m -> do
+        let publicKeyBS = maybe (error "Can't get public key") (PubBS . decodeKey . toS) $ lookup "public" m
+            publicKeyBS' = lookup "public" m
+            privateKeyBS = maybe (error "Can't get private key") (PrivBS . decodeKey . toS) $ lookup "secret" m
+            address = maybe (maybe (error "Can't find address") toS publicKeyBS') toS $ lookup "address" m
+            scheme = ED25519
+        return (publicKeyBS, privateKeyBS, address, scheme)
+
+parseKey :: String -> ReadP (String, String)
+parseKey k = do
+  void $ string k
+  skipSpaces
+  void $ char ':'
+  skipSpaces
+  v <- munch isAlphaNum
+  return (k, v)
 
 ---------------------------
 -- FOR DEBUGGING IN GHCI --
