@@ -21,4 +21,4 @@ package configuration-tools
 
 constraints: sbv <=8.8
 constraints: base64-bytestring <= 1.1.0.0
-constraints: base16-bytestring == 1.0.1.0
+constraints: base16-bytestring <1
