@@ -161,7 +161,6 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 data Args = Args
   { scriptCommand   :: !TXCmd
   , nodeChainIds    :: ![ChainId]
-  , isChainweb      :: !Bool
   , hostAddresses   :: ![HostAddress]
   , nodeVersion     :: !ChainwebVersion
   , batchSize       :: !BatchSize
@@ -175,7 +174,6 @@ instance ToJSON Args where
   toJSON o = object
     [ "scriptCommand"   .= scriptCommand o
     , "nodeChainIds"    .= nodeChainIds o
-    , "isChainweb"      .= isChainweb o
     , "hostAddresses"   .= hostAddresses o
     , "chainwebVersion" .= nodeVersion o
     , "batchSize"       .= batchSize o
@@ -189,7 +187,6 @@ instance FromJSON (Args -> Args) where
   parseJSON = withObject "Args" $ \o -> id
     <$< field @"scriptCommand"   ..: "scriptCommand"   % o
     <*< field @"nodeChainIds"    ..: "nodeChainIds"    % o
-    <*< field @"isChainweb"      ..: "isChainweb"      % o
     <*< field @"hostAddresses"   ..: "hostAddresses"   % o
     <*< field @"nodeVersion"     ..: "chainwebVersion" % o
     <*< field @"batchSize"       ..: "batchSize"       % o
@@ -202,7 +199,6 @@ defaultArgs :: Args
 defaultArgs = Args
   { scriptCommand   = RunSimpleExpressions defaultTimingDist
   , nodeChainIds    = []
-  , isChainweb      = True
   , hostAddresses   = []
   , nodeVersion     = v
   , batchSize       = BatchSize 1
