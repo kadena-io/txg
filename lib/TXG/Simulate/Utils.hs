@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE CPP #-}
 
 module TXG.Simulate.Utils where
 
@@ -58,7 +59,11 @@ someED25519Pair =
 --     )
 
 decodeKey :: ByteString -> ByteString
+#if !MIN_VERSION_base16_bytestring(1,0,1)
 decodeKey = fst . B16.decode
+#else
+decodeKey = either (error "TXG.Simulate.Utils:decodeKey: decode failed") id . B16.decode
+#endif
 
 initAdminKeysetContract
     :: ChainwebVersion
