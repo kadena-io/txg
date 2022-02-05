@@ -578,7 +578,7 @@ realXChainCoinTransactions
   -> TimingDistribution
   -> LoggerT T.Text IO ()
 realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
-    when (null $ drop 1 $ nodeChainIds config) $ fail "You must specify at least 2 chains for cross-chain transfers"
+    when (null $ drop 1 $ nodeChainIds config) $ liftIO $ fail "You must specify at least 2 chains for cross-chain transfers"
     cfg <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
     let chains = maybe (versionChains $ nodeVersion config) NES.fromList
                 . NEL.nonEmpty
