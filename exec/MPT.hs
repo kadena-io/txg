@@ -139,17 +139,17 @@ worker config = do
           }
       cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
       _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
-      _key <- readIORef hostkey
+      nodekey <- readIORef hostkey
       atomicModifyIORef' hostkey (\i -> (i+1, ()))
-      runLoggerT (act _key tv tcut trkeys cfg) l
+      runLoggerT (act nodekey tv tcut trkeys cfg) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
     act :: Integer -> TVar TXCount -> TVar Cut -> TVar PollMap -> TXGConfig -> LoggerT T.Text IO ()
-    act k tv tcut trkeys cfg = localScope (const [(hostnameToText (_hostAddressHost $ confHost cfg), portToText (_hostAddressPort $ confHost cfg))]) $ do
-      coinTransfers k config tv tcut trkeys cfg
+    act nodekey tv tcut trkeys cfg = localScope (const [(hostnameToText (_hostAddressHost $ confHost cfg), portToText (_hostAddressPort $ confHost cfg))]) $ do
+      coinTransfers nodekey config tv tcut trkeys cfg
 
 
 cutLoop :: Manager -> TVar Cut -> ChainwebHost -> ChainwebVersion -> IO ()
@@ -312,9 +312,12 @@ loopUntilConfirmationDepth confirmationDepth cid startHeight tcut = do
 loop
   :: (MonadIO m, MonadLog T.Text m)
   => Integer
+  -> Text
+  -> Int
+  -> TVar Cut
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
-loop k f = forever $ do
+loop nodekey dbFile confirmationDepth tcut f = forever $ do
   liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
@@ -333,6 +336,7 @@ loop k f = forever $ do
       lift . logg Info $ "Transaction count: " <> T.pack (show count)
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
       let retrier = retrying policy (const (pure . isRight)) . const
+          isRight = foldr (const $ const True) False
           policy :: RetryPolicyM IO
           policy = exponentialBackoff 50_000 <> limitRetries 10
       poll_result <- liftIO $ retrier $ pollRequestKeys config cid rks
@@ -344,12 +348,14 @@ loop k f = forever $ do
                 ms_chainid = cid
               , ms_txhash = rk
               , ms_stat = TimeUntilMempoolAcceptance (TimeSpan start end)
+              , ms_nodekey = nodekey
               }
             transmitMempoolStat dbFile $ MempoolStat
               {
                 ms_chainid = cid
               , ms_txhash = rk
               , ms_stat = TimeUntilBlockInclusion (TimeSpan poll_start poll_end)
+              , ms_nodekey = nodekey
               }
             let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
             cstart <- getCurrentTimeInt64
@@ -360,6 +366,7 @@ loop k f = forever $ do
                     ms_chainid = cid
                 ,  ms_txhash = rk
                 , ms_stat = TimeUntilConfirmationDepth (TimeSpan cstart cend)
+                , ms_nodekey = nodekey
                 }
 
       forM_ (Compose msgs) $ \m ->
@@ -475,7 +482,7 @@ coinTransfers
    -> TVar PollMap
    -> TXGConfig
    -> LoggerT T.Text IO ()
-coinTransfers k config tv tcut trkeys cfg = do
+coinTransfers nodekey config tv tcut trkeys cfg = do
 
     let chains = maybe (versionChains (mpt_nodeVersion config)) NES.fromList
                   . NEL.nonEmpty
@@ -494,7 +501,7 @@ coinTransfers k config tv tcut trkeys cfg = do
 
     -- set up values for running the effect stack?
     gen <- liftIO createSystemRandom
-    let act = loop k (generateTransactions True (mpt_verbose config) CoinContract)
+    let act = loop nodekey (mpt_dbFile config) (mpt_confirmationDepth config) tcut (generateTransactions True (mpt_verbose config) CoinContract)
         env = set (field @"confKeysets") accountMap cfg
           & over (field @"confKeysets") (fmap (M.filterWithKey (\(Sim.Account _k) _ -> _k `elem` (mpt_accounts config))))
         stt = MPTState gen tv tcut trkeys chains
