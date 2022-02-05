@@ -14,9 +14,11 @@ source-repository-package
     tag: 6ee9fcb026ebdb49b810802a981d166680d867c9
 
 package hostaddress
-    flags: +with-configuration-tools
+    flags: +with-configuration-tools +with-aeson
 
 package configuration-tools
     flags: -remote-configs
 
 constraints: sbv <=8.8
+constraints: base64-bytestring <= 1.1.0.0
+constraints: base16-bytestring <1
