@@ -26,19 +26,19 @@ common commons
     -funclutter-valid-hole-fits
 
   build-depends:
-    , aeson                 >=1.4
+    , aeson
     , attoparsec            >=0.13
     , base                  >=4.7  && <5
-    , base16-bytestring     >=0.1
+    , base16-bytestring
     , base64                >=0.4
     , bytestring
-    , configuration-tools   >=0.4
+    , configuration-tools
     , connection            >=0.3
     , containers
     , Decimal               >=0.5
     , exceptions            >=0.10
     , fake                  >=0.1
-    , hostaddress           >=0.1
+    , hostaddress
     , http-client           >=0.6
     , http-client-tls       >=0.3
     , http-types            >=0.12
@@ -85,7 +85,7 @@ executable txg
     , generic-lens         >=1.1
     , mwc-random           >=0.14
     , nonempty-containers  >=0.3
-    , pretty-simple        >=2.2
+    , pretty-simple        >=2.2 && < 4.0
     , primitive            >=0.6
     , stm
     , txg
@@ -106,7 +106,7 @@ executable mempool-p2p-tester
     , lens-aeson          >= 1.1
     , mwc-random          >=0.14
     , nonempty-containers >=0.3
-    , pretty-simple       >=2.2
+    , pretty-simple       >=2.2 && < 4.0
     , primitive           >=0.6
     , retry
     , stm

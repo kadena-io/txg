@@ -186,7 +186,7 @@ distinctPairsSendersOverList xs@(_first:_second:_rest) = do
       if a /= b
         then return (a,b)
         else loop
-distinctPairsSendersOverList _ = fail "distinctPairSendersOverList: Please give at least two accounts!"
+distinctPairsSendersOverList _ = error "distinctPairSendersOverList: Please give at least two accounts!"
 
 -- hardcoded sender (sender00)
 makeMeta :: ChainId -> CM.TTLSeconds -> GasPrice -> GasLimit -> IO CM.PublicMeta
