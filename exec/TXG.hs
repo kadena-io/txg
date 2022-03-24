@@ -40,7 +40,7 @@ import qualified Data.ByteString.Lazy as LB
 import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
-import qualified Data.List as L
+-- import qualified Data.List as L
 import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import qualified Data.Map as M
@@ -62,7 +62,7 @@ import qualified Pact.Types.ChainId as CI
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command
 import           Pact.Types.Crypto
-    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), SomeKeyPair)
+    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..))
 import           Pact.Types.Exp (Literal(..))
 import           Pact.Types.Gas
 import qualified Pact.Types.Hash as H
@@ -155,11 +155,11 @@ data CmdChoice = CoinContract | HelloWorld | Payments
 randomEnum :: forall a. (Enum a, Bounded a) => IO a
 randomEnum = toEnum <$> randomRIO @Int (0, fromEnum $ maxBound @a)
 
-generateXChainTransactions
+_generateXChainTransactions
     :: forall m. (MonadIO m, MonadLog T.Text m)
     => Verbose
     -> TXG TXGState m (Sim.ChainId, Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
-generateXChainTransactions isVerbose = do
+_generateXChainTransactions isVerbose = do
   -- Choose a source Chain to send this transaction to, and cycle the state.
   sourceChain <- NES.head <$> gets gsChains
   field @"gsChains" %= rotate
@@ -195,7 +195,7 @@ generateXChainTransactions isVerbose = do
         -> Sim.ChainId
         -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
         -> IO (Maybe Text, Command Text)
-    xChainTransfer gl gp ttl version (Verbose vb) sourceChain targetChain coinaccts = do
+    xChainTransfer gl gp ttl version (Verbose vb) sourceChain _targetChain coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest True coinaccts >>= generate
       let msg = if vb then Just $ T.pack (show coinContractRequest) else Nothing
       let acclookup sn@(Sim.Account accsn) =
@@ -361,12 +361,12 @@ isMempoolMember c cid = mempoolMember
   (confVersion c)
   cid
 
-xChainLoop
+_xChainLoop
   :: (MonadIO m, MonadLog T.Text m)
   => TXG TXGState m (Sim.ChainId, Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG TXGState m ()
-xChainLoop f = forever $ do
-  (sourceChain, targetChain, msgs, transactions) <- f
+_xChainLoop f = forever $ do
+  (sourceChain, targetChain, _msgs, transactions) <- f
   config <- ask
   requestKeys <- liftIO $ pactSend config sourceChain transactions
 
@@ -387,7 +387,7 @@ xChainLoop f = forever $ do
     -- 2) with request key, poll nodes for continuation on source chain
         conts <- liftIO (pactPoll config sourceChain rks)
                  >>= \case
-                    Left cerr -> undefined
+                    Left _cerr -> undefined
                     Right (PollResponses polls) ->
                        forM polls $ \cr ->
                           return $ case _crContinuation cr of
@@ -395,24 +395,24 @@ xChainLoop f = forever $ do
                             Just pe -> Right (_crReqKey cr, pe)
 
     -- 3) get spv proof with okCont from source chain
-        proofs <-  liftIO $ forM (rights $ toList conts) $ \(rk,pe) ->
+        _proofs <-  liftIO $ forM (rights $ toList conts) $ \(rk,pe) ->
           pactSPV config targetChain rk >>= \case
             Left err -> return $ Left $ show err
             Right proof -> return $ Right (pe, proof)
         -- proofs :: (NEL.NonEmpty Text) <- ExceptT $ liftIO $ fmap sequence $ mapM (\(rk, pe) -> pactSPV config targetChain rk) conts
     -- assume gas payer is same as sender
     -- 4) run continuation from spv proof on target chain
-        let sender = undefined
-            meta = undefined
-        payloads <- undefined
-        xconts <- undefined
-        xRequestKeys <- liftIO $ pactSend config targetChain $ xconts
+        let _sender = undefined
+            _meta = undefined
+        _payloads <- undefined
+        _xconts <- undefined
+        _xRequestKeys <- liftIO $ pactSend config targetChain $ _xconts
         countTV <- gets gsCounter
         batch <- asks confBatchSize
         liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
         count <- liftIO $ readTVarIO countTV
         lift . logg Info $ "Transaction count: " <> T.pack (show count)
-        lift . logg Info $ "Transaction request keys: " <> T.pack (show xRequestKeys)
+        lift . logg Info $ "Transaction request keys: " <> T.pack (show _xRequestKeys)
 
 
 
@@ -576,13 +576,13 @@ realTransactions config (ChainwebHost h _p2p service) tv distribution = do
         ps = (Sim.ContractName "payment", pks)
         cs = (Sim.ContractName "coin", cks)
 
-realXChainCoinTransactions
+_realXChainCoinTransactions
   :: Args
   -> ChainwebHost
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
+_realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
     when (null $ drop 1 $ nodeChainIds config) $ liftIO $ fail "You must specify at least 2 chains for cross-chain transfers"
     cfg <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
     let chains = maybe (versionChains $ nodeVersion config) NES.fromList
@@ -601,7 +601,7 @@ realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution 
 
     -- Set up values for running the effect stack.
     gen <- liftIO createSystemRandom
-    let act = xChainLoop (generateXChainTransactions (verbose config))
+    let act = _xChainLoop (_generateXChainTransactions (verbose config))
         env = set (field @"confKeysets") accountMap cfg
         stt = TXGState gen tv chains
 
@@ -807,8 +807,8 @@ work cfg = do
           realTransactions cfg chainwebHost tv distribution
         RunCoinContract distribution ->
           realCoinTransactions cfg chainwebHost tv distribution
-        RunXChainTransfer distribution ->
-          realXChainCoinTransactions cfg chainwebHost tv distribution
+        RunXChainTransfer _distribution -> error "xchain transfers not yet implemented"
+          -- _realXChainCoinTransactions cfg chainwebHost tv distribution
         RunSimpleExpressions distribution ->
           simpleExpressions cfg chainwebHost tv distribution
         PollRequestKeys rk -> liftIO $ pollRequestKeys cfg chainwebHost
