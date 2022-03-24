@@ -75,8 +75,7 @@ import qualified Options.Applicative as O
 import           Pact.Parse
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
-import           Pact.Types.Crypto
-    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), SomeKeyPair)
+import           Pact.Types.Crypto ()
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
@@ -223,6 +222,7 @@ data Args = Args
   , gasLimit        :: GasLimit
   , gasPrice        :: GasPrice
   , timetolive      :: TTLSeconds
+  , trackMempoolStat :: !Bool
   } deriving (Show, Generic)
 
 instance ToJSON Args where
@@ -237,6 +237,7 @@ instance ToJSON Args where
     , "gasLimit"        .= gasLimit o
     , "gasPrice"        .= gasPrice o
     , "timetolive"      .= timetolive o
+    , "trackMempoolStat" .= trackMempoolStat o
     ]
 
 instance FromJSON (Args -> Args) where
@@ -251,6 +252,7 @@ instance FromJSON (Args -> Args) where
     <*< field @"gasLimit"        ..: "gasLimit"        % o
     <*< field @"gasPrice"        ..: "gasPrice"        % o
     <*< field @"timetolive"      ..: "timetolive"      % o
+    <*< field @"trackMempoolStat" ..: "trackMempoolStat" %o
 
 defaultArgs :: Args
 defaultArgs = Args
@@ -264,6 +266,7 @@ defaultArgs = Args
   , gasLimit = Sim.defGasLimit
   , gasPrice = Sim.defGasPrice
   , timetolive = Sim.defTTL
+  , trackMempoolStat = False
   }
   where
     v :: ChainwebVersion
@@ -305,6 +308,10 @@ scriptConfigParser = id
       % long "time-to-live"
       <> metavar "SECONDS"
       <> help "The time to live (in seconds) of each auto-generated transaction"
+  <*< field @"trackMempoolStat" .:: option auto
+      % long "track-mempool-stat"
+      <> metavar "BOOL"
+      <> help "Wether to print out mempool related statistics"
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -361,6 +368,7 @@ data TXGConfig = TXGConfig
   , confGasLimit :: GasLimit
   , confGasPrice :: GasPrice
   , confTTL :: TTLSeconds
+  , confTrackMempoolStat :: !Bool
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
@@ -377,6 +385,7 @@ mkTXGConfig mdistribution config hostAddr = do
     , confGasLimit = gasLimit config
     , confGasPrice = gasPrice config
     , confTTL = timetolive config
+    , confTrackMempoolStat = trackMempoolStat config
     }
 
 -- -------------------------------------------------------------------------- --

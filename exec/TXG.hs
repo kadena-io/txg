@@ -446,7 +446,8 @@ type ContractLoader
 
 loadContracts :: Args -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
 loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl') <- mkTXGConfig Nothing config (HostAddress h service)
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat)
+        <- mkTXGConfig Nothing config (HostAddress h service)
   forM_ (nodeChainIds config) $ \cid -> do
     !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
     ts <- testSomeKeyPairs
@@ -492,7 +493,8 @@ data ApiError = ApiError
 
 loadContractsAtHeight :: Args -> Integer -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
 loadContractsAtHeight config height (ChainwebHost host p2p service) contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl') <- mkTXGConfig Nothing config (HostAddress host service)
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat)
+        <- mkTXGConfig Nothing config (HostAddress host service)
   fix $ \fixloop -> do
     -- query the latest cut
     ecut <- queryCut (confManager conf) (HostAddress host p2p) (confVersion conf)
@@ -525,7 +527,8 @@ realTransactions
   -> TimingDistribution
   -> LoggerT T.Text IO ()
 realTransactions config (ChainwebHost h _p2p service) tv distribution = do
-  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl') <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
+  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat)
+        <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
                . NEL.nonEmpty
