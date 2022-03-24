@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE NumericUnderscores          #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -31,6 +32,7 @@ import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
+import           Control.Retry
 import           Data.Aeson.Lens
 import           Data.Char (isAlphaNum)
 import           Data.Generics.Product.Fields (field)
@@ -747,19 +749,40 @@ inMempool args (ChainwebHost h _p2p service) (cid, txhashes)
           Left e -> print e >> exitWith (ExitFailure 1)
           Right res -> pPrintNoColor res
 
+
+getInitialCut :: Manager -> Args -> IO Cut
+getInitialCut mgr cfg = do
+  let policy :: RetryPolicyM IO
+      policy = exponentialBackoff 250_000 <> limitRetries 3
+      toRetry _ = \case
+        Right _ -> return False
+        Left (ApiError RateLimiting _ _) -> return True
+        Left (ApiError EClientError _ _) -> return False
+        Left (ApiError ServerError _ _) -> return True
+        Left (ApiError (OtherError _) _ _) -> return False
+      p2pHost (ChainwebHost host p2p _) = HostAddress host p2p
+  retrying policy toRetry (const $ queryCut mgr (p2pHost $ head $ chainwebHosts cfg) (nodeVersion cfg)) >>= \case
+    Right cut -> pure cut
+    Left err -> die $ "cut processing: " <> show err
+
 work :: Args -> IO ()
 work cfg = do
   tv  <- newTVarIO 0
+  let nds = zipWith toNodeData [0..] (chainwebHosts cfg)
+  _trkeys :: TVar PollMap <- newTVarIO $ M.fromList $ zip nds (repeat $ M.fromList $ zip (nodeChainIds cfg) (repeat mempty))
+  _mgr <- unsafeManager
+  _cut <- getInitialCut _mgr cfg
+  _tcut <- newTVarIO _cut
   withLog $ \l -> forConcurrently_ (chainwebHosts cfg) $ \chainwebHost ->
-    runLoggerT (act tv chainwebHost) l
+    runLoggerT (act undefined tv chainwebHost) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
 
-    act :: TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
-    act tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
+    act :: IO a -> TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
+    act _initCutLoop tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
       case scriptCommand cfg of
         DeployContracts (DeployContractsArgs _ m) | M.null m -> liftIO $ do
           let v = nodeVersion cfg

@@ -46,9 +46,11 @@ module TXG.Types
   , BatchSize(..)
   , ContractKeyset(..)
   , DeployContractsArgs(..)
+  , PollMap
   , Verbose(..)
   , nelReplicate
   , nelZipWith3
+  , toNodeData
   ) where
 
 import           Configuration.Utils hiding (Error, Lens')
@@ -62,23 +64,28 @@ import           Data.Bifunctor
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import           Data.Decimal
+import           Data.Function
 import           Data.Generics.Product.Fields (field)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import           Data.Int
 import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
 import qualified Options.Applicative as O
 import           Pact.Parse
+import           Pact.Types.API
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Crypto ()
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
+import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Utils
 
@@ -407,3 +414,30 @@ nelReplicate n a = NEL.unfoldr f n
 
 nelZipWith3 :: (a -> b -> c -> d) -> NEL.NonEmpty a -> NEL.NonEmpty b -> NEL.NonEmpty c -> NEL.NonEmpty d
 nelZipWith3 f ~(x NEL.:| xs) ~(y NEL.:| ys) ~(z NEL.:| zs) = f x y z NEL.:| zipWith3 f xs ys zs
+
+type PollMap = Map NodeData (Map ChainId [(TimeSpan, RequestKeys)])
+
+data NodeData = NodeData
+  {
+    nodeData_key :: !Int
+  , nodeData_name :: !T.Text
+  } deriving Show
+
+instance Eq NodeData where
+  (==) = on (==) nodeData_key
+
+instance Ord NodeData where
+  compare = on compare nodeData_key
+
+toNodeData :: Int -> ChainwebHost -> NodeData
+toNodeData nodeKey ch = NodeData
+  {
+    nodeData_key = nodeKey
+  , nodeData_name = T.pack $ printf "%s:%s" (show $ cwh_hostname ch) (show $ cwh_servicePort ch)
+  }
+
+data TimeSpan = TimeSpan
+  {
+    start_time :: Int64
+  , end_time :: Int64
+  } deriving Show
