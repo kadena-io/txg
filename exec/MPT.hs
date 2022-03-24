@@ -82,7 +82,7 @@ import           TXG.Simulate.Contracts.CoinContract
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Simulate.Contracts.HelloWorld
 import           TXG.Simulate.Contracts.SimplePayments
-import           TXG.Types
+import           TXG.Types hiding (PollMap, toNodeData)
 import           TXG.Utils
 import           MPT.Types
 
@@ -136,6 +136,7 @@ worker config = do
           , confGasLimit = mpt_gasLimit config
           , confGasPrice = mpt_gasPrice config
           , confTTL = mpt_timetolive config
+          , confTrackMempoolStat = False -- this will be ignored
           }
       cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
       _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
@@ -248,6 +249,7 @@ mkMPTConfig mdistribution manager mpt_config hostAddr =
     , confGasLimit = mpt_gasLimit mpt_config
     , confGasPrice = mpt_gasPrice mpt_config
     , confTTL = mpt_timetolive mpt_config
+    , confTrackMempoolStat = False -- this will be ignored
     }
 
 data ApiError = ApiError
@@ -329,7 +331,7 @@ loop nodekey dbFile confirmationDepth tcut f = forever $ do
       lift . logg Error $ T.pack (show servantError)
     Right rks -> do
       countTV <- gets mptCounter
-      trkeys <- gets mptPollMap
+      _trkeys <- gets mptPollMap
       batch <- asks confBatchSize
       liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
       count <- liftIO $ readTVarIO countTV

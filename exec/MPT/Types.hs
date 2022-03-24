@@ -44,7 +44,7 @@ import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
 import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
-import           TXG.Types
+import           TXG.Types hiding (PollMap)
 import           TXG.Utils
 
 -------
