@@ -230,6 +230,7 @@ data Args = Args
   , gasPrice        :: GasPrice
   , timetolive      :: TTLSeconds
   , trackMempoolStat :: !Bool
+  , confirmationDepth :: !Int
   } deriving (Show, Generic)
 
 instance ToJSON Args where
@@ -245,6 +246,7 @@ instance ToJSON Args where
     , "gasPrice"        .= gasPrice o
     , "timetolive"      .= timetolive o
     , "trackMempoolStat" .= trackMempoolStat o
+    , "confirmationDepth" .= confirmationDepth o
     ]
 
 instance FromJSON (Args -> Args) where
@@ -260,6 +262,7 @@ instance FromJSON (Args -> Args) where
     <*< field @"gasPrice"        ..: "gasPrice"        % o
     <*< field @"timetolive"      ..: "timetolive"      % o
     <*< field @"trackMempoolStat" ..: "trackMempoolStat" %o
+    <*< field @"confirmationDepth" ..: "confirmationDepth" %o
 
 defaultArgs :: Args
 defaultArgs = Args
@@ -274,6 +277,7 @@ defaultArgs = Args
   , gasPrice = Sim.defGasPrice
   , timetolive = Sim.defTTL
   , trackMempoolStat = False
+  , confirmationDepth = 6
   }
   where
     v :: ChainwebVersion
@@ -319,6 +323,10 @@ scriptConfigParser = id
       % long "track-mempool-stat"
       <> metavar "BOOL"
       <> help "Wether to print out mempool related statistics"
+  <*< field @"confirmationDepth" .:: option auto
+      % long "confirmation-depth"
+      <> metavar "INT"
+      <> help "Confirmation depth"
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)

@@ -28,6 +28,7 @@ import           Configuration.Utils hiding (many, Error, Lens')
 import           Control.Concurrent
 import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
+import           Control.Exception (throwIO)
 import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
@@ -41,7 +42,9 @@ import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
 -- import qualified Data.List as L
+import           Data.Int
 import qualified Data.List.NonEmpty as NEL
+import qualified Data.HashMap.Strict as HM
 import           Data.Map (Map)
 import qualified Data.Map as M
 import           Data.Maybe
@@ -51,6 +54,7 @@ import           Data.String.Conv (toS)
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import           Data.Time.Clock.POSIX
 import           Fake (fake, generate)
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (host)
@@ -68,6 +72,7 @@ import           Pact.Types.Gas
 import qualified Pact.Types.Hash as H
 import           Pact.Types.Info (mkInfo)
 import           Pact.Types.Names
+import           Pact.Types.PactError
 import           Pact.Types.PactValue
 import           System.Logger hiding (StdOut)
 import qualified System.Logger as Y
@@ -418,28 +423,112 @@ _xChainLoop f = forever $ do
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
-  => TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
+  => Int
+  -> TVar Cut
+  -> TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG TXGState m ()
-loop f = do
+loop confDepth tcut f = forever $ do
   (cid, msgs, transactions) <- f
   config <- ask
-  requestKeys <- liftIO $ pactSend config cid transactions
+  (requestKeys,start,end) <- liftIO $ trackTime $ pactSend config cid transactions
 
   case requestKeys of
     Left servantError ->
       lift . logg Error $ T.pack (show servantError)
-    Right rk -> do
+    Right rks -> do
       countTV <- gets gsCounter
       batch <- asks confBatchSize
       liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
       count <- liftIO $ readTVarIO countTV
       lift . logg Info $ "Transaction count: " <> T.pack (show count)
-      lift . logg Info $ "Transaction requestKey: " <> T.pack (show rk)
+      lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
+      let retrier = retrying policy (const (pure . isRight)) . const
+          policy :: RetryPolicyM IO
+          policy = exponentialBackoff 50_000 <> limitRetries 10
+      poll_result <- liftIO $ retrier $ pollRequestKeys' config cid rks
+      case poll_result of
+        Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%) %s" (show rks) err
+        Right (poll_start,poll_end,result) -> iforM_ result $ \rk res -> do
+          logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
+          logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
+          let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
+          cstart <- liftIO getCurrentTimeInt64
+          cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
+          logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+
       forM_ (Compose msgs) $ \m ->
         lift . logg Info $ "Actual transaction: " <> m
 
-  loop f
+logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> MempoolStat' -> t m ()
+logStat cid rk ms = lift $ logg Info $ T.pack $ show $ MempoolStat
+  {
+    ms_chainid = cid
+  , ms_txhash = rk
+  , ms_stat = ms
+  }
 
+type BlockHeight = Int
+
+loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO Int64
+loopUntilConfirmationDepth confDepth cid startHeight tcut = do
+  atomically $ do
+    cut <- readTVar tcut
+    let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
+    check (height >= (startHeight + confDepth))
+  getCurrentTimeInt64
+
+data MempoolStat = MempoolStat
+  {
+    ms_chainid :: ChainId
+  , ms_txhash :: RequestKey
+  , ms_stat :: MempoolStat'
+  }
+
+instance Show MempoolStat where
+  show (MempoolStat cid txhash stat) = printf "chainid: %s, txhash: %s, data: %s" (show cid) (show txhash) (show stat)
+
+data TimeSpan = TimeSpan
+  {
+    start_time :: Int64
+  , end_time :: Int64
+  }
+instance Show TimeSpan where
+  show (TimeSpan s e) = show (s,e)
+
+data MempoolStat' =
+  TimeUntilMempoolAcceptance TimeSpan
+  | TimeUntilBlockInclusion TimeSpan
+  | TimeUntilConfirmationDepth TimeSpan
+
+instance Show MempoolStat' where
+  show = show . \case
+    TimeUntilMempoolAcceptance t -> t
+    TimeUntilBlockInclusion t -> t
+    TimeUntilConfirmationDepth t -> t
+
+getCurrentTimeInt64 :: IO Int64
+getCurrentTimeInt64 = do
+  -- returns POSIX seconds with picosecond precision
+  t <- getPOSIXTime
+  return $! round $ t * 100_000
+
+trackTime :: IO a -> IO (a, Int64, Int64)
+trackTime act = do
+  t1 <- getCurrentTimeInt64
+  r <- act
+  t2 <- getCurrentTimeInt64
+  return (r,t1,t2)
+
+pollRequestKeys' :: TXGConfig -> ChainId -> RequestKeys -> IO (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
+pollRequestKeys' cfg cid rkeys = do
+    (response, start, end) <- trackTime $ pactPoll cfg cid rkeys
+    case response of
+      Left _ -> pure $ Left "Failure"
+      Right (PollResponses as)
+        | null as -> pure $ Left "Failure no result returned"
+        | otherwise -> pure $ Right $ (start, end, fmap f as)
+  where
+    f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
 
 type LoadedKeyPairCaps = Map Text (NEL.NonEmpty SomeKeyPairCaps)
 
@@ -525,10 +614,11 @@ loadContractsAtHeight config height (ChainwebHost host p2p service) contractLoad
 realTransactions
   :: Args
   -> ChainwebHost
+  -> TVar Cut
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-realTransactions config (ChainwebHost h _p2p service) tv distribution = do
+realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
   cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat)
         <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
@@ -553,7 +643,7 @@ realTransactions config (ChainwebHost h _p2p service) tv distribution = do
 
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
-  let act = loop (liftIO randomEnum >>= generateTransactions False (verbose config))
+  let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
 
@@ -622,10 +712,11 @@ _realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution
 realCoinTransactions
   :: Args
   -> ChainwebHost
+  -> TVar Cut
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-realCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
+realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
   cfg <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
@@ -645,7 +736,7 @@ realCoinTransactions config (ChainwebHost h _p2p service) tv distribution = do
 
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
-  let act = loop (generateTransactions True (verbose config) CoinContract)
+  let act = loop (confirmationDepth config) tcut (generateTransactions True (verbose config) CoinContract)
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
 
@@ -669,10 +760,11 @@ versionChains = NES.fromList . NEL.fromList . chainIds
 simpleExpressions
   :: Args
   -> ChainwebHost
+  -> TVar Cut
   -> TVar TXCount
   -> TimingDistribution
   -> LoggerT T.Text IO ()
-simpleExpressions config (ChainwebHost h _p2p service) tv distribution = do
+simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
   logg Info "Simple Expressions: Transactions are being generated"
   gencfg <- lift $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
@@ -683,7 +775,7 @@ simpleExpressions config (ChainwebHost h _p2p service) tv distribution = do
              $ nodeChainIds config
       stt = TXGState gen tv chs
 
-  evalStateT (runReaderT (runTXG (loop generateSimpleTransactions)) gencfg) stt
+  evalStateT (runReaderT (runTXG (loop (confirmationDepth config) tcut generateSimpleTransactions)) gencfg) stt
 
 pollRequestKeys :: Args -> ChainwebHost -> RequestKey -> IO ()
 pollRequestKeys config (ChainwebHost h _p2p service) rkey = do
@@ -765,24 +857,48 @@ getInitialCut mgr cfg = do
     Right cut -> pure cut
     Left err -> die $ "cut processing: " <> show err
 
+cutLoop :: Manager -> TVar Cut -> ChainwebHost -> ChainwebVersion -> IO ()
+cutLoop mgr tcut addr version = forever $ do
+  threadDelay $ 60 * 1000_000
+  let policy = exponentialBackoff 250_000 <> limitRetries 3
+      toRetry _ = \case
+        Right _ -> return False
+        Left (ApiError RateLimiting _ _) -> return True
+        Left (ApiError EClientError _ _) -> return False
+        Left (ApiError ServerError _ _) -> return True
+        Left (ApiError (OtherError _) _ _) -> return False
+      p2pHost (ChainwebHost host p2p _) = HostAddress host p2p
+  cut <- retrying policy toRetry (const $ queryCut mgr (p2pHost addr) version) >>= \case
+    Left err -> throwIO $ userError $ show err
+    Right cut -> pure cut
+
+  atomically $
+  -- assumption --
+  -- given a delay of 60 seconds, let's assume that the cut has changed
+  -- assumption --
+    writeTVar tcut cut
+
+
 work :: Args -> IO ()
 work cfg = do
   tv  <- newTVarIO 0
   let nds = zipWith toNodeData [0..] (chainwebHosts cfg)
   _trkeys :: TVar PollMap <- newTVarIO $ M.fromList $ zip nds (repeat $ M.fromList $ zip (nodeChainIds cfg) (repeat mempty))
-  _mgr <- unsafeManager
-  _cut <- getInitialCut _mgr cfg
-  _tcut <- newTVarIO _cut
+  mgr <- unsafeManager
+  cut <- getInitialCut mgr cfg
+  tcut <- newTVarIO cut
+  let startCutLoop =
+        forkFinally (cutLoop mgr tcut (head $ chainwebHosts cfg) (nodeVersion cfg)) $ either throwIO pure
   withLog $ \l -> forConcurrently_ (chainwebHosts cfg) $ \chainwebHost ->
-    runLoggerT (act undefined tv chainwebHost) l
+    runLoggerT (act startCutLoop tcut tv chainwebHost) l
   where
     logconfig = Y.defaultLogConfig
         & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
 
-    act :: IO a -> TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
-    act _initCutLoop tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
+    act :: IO ThreadId -> TVar Cut -> TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
+    act startCutLoop tcut tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
       case scriptCommand cfg of
         DeployContracts (DeployContractsArgs _ m) | M.null m -> liftIO $ do
           let v = nodeVersion cfg
@@ -803,14 +919,17 @@ work cfg = do
                 return $ M.insert contractName ksm m
           toLoad <- M.toList <$> ifoldrM mkContractMap mempty ckss
           loadContractsAtHeight cfg height chainwebHost $ initAdminKeysetContract v NEL.:| map (\(c, m) -> createLoader v c m) toLoad
-        RunStandardContracts distribution ->
-          realTransactions cfg chainwebHost tv distribution
-        RunCoinContract distribution ->
-          realCoinTransactions cfg chainwebHost tv distribution
+        RunStandardContracts distribution -> do
+          void $ liftIO $ startCutLoop
+          realTransactions cfg chainwebHost tcut tv distribution
+        RunCoinContract distribution -> do
+          void $ liftIO $ startCutLoop
+          realCoinTransactions cfg chainwebHost tcut tv distribution
         RunXChainTransfer _distribution -> error "xchain transfers not yet implemented"
           -- _realXChainCoinTransactions cfg chainwebHost tv distribution
-        RunSimpleExpressions distribution ->
-          simpleExpressions cfg chainwebHost tv distribution
+        RunSimpleExpressions distribution -> do
+          void $ liftIO $ startCutLoop
+          simpleExpressions cfg chainwebHost tcut tv distribution
         PollRequestKeys rk -> liftIO $ pollRequestKeys cfg chainwebHost
           . RequestKey
           . H.Hash
@@ -863,7 +982,7 @@ createLoader v (Sim.ContractName contractName) m meta kp = do
 -- Remember that coin contract is already loaded.
 defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader
 defaultContractLoaders v =
-    NEL.fromList [ \meta _ -> helloWorldContractLoader v meta undefined, \meta _ -> simplePaymentsContractLoader v meta undefined]
+    NEL.fromList [ \meta ks -> helloWorldContractLoader v meta ks, \meta ks -> simplePaymentsContractLoader v meta ks]
 
 makeContractKeys :: ContractKeyset -> IO (Text, NEL.NonEmpty SomeKeyPairCaps)
 makeContractKeys (ContractKeyset keysetName fps) = do
