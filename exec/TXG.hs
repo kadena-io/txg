@@ -24,7 +24,7 @@
 
 module Main ( main ) where
 
-import           Configuration.Utils hiding (many, Error, Lens')
+import           Configuration.Utils hiding (option, many, Error, Lens')
 import           Control.Concurrent
 import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
@@ -35,7 +35,6 @@ import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Control.Retry
 import           Data.Aeson.Lens
-import           Data.Char (isAlphaNum)
 import           Data.Generics.Product.Fields (field)
 import qualified Data.ByteString.Lazy as LB
 import           Data.Either
@@ -66,7 +65,7 @@ import qualified Pact.Types.ChainId as CI
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command
 import           Pact.Types.Crypto
-    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..))
+    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), defaultScheme, genKeyPair)
 import           Pact.Types.Exp (Literal(..))
 import           Pact.Types.Gas
 import qualified Pact.Types.Hash as H
@@ -80,7 +79,7 @@ import           System.Exit
 import           System.Random
 import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
-import           Text.ParserCombinators.ReadP hiding (count)
+import           Text.Parsec hiding (Error)
 import           Text.Pretty.Simple (pPrintNoColor)
 import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
@@ -415,8 +414,8 @@ _xChainLoop f = forever $ do
         countTV <- gets gsCounter
         batch <- asks confBatchSize
         liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
-        count <- liftIO $ readTVarIO countTV
-        lift . logg Info $ "Transaction count: " <> T.pack (show count)
+        cnt <- liftIO $ readTVarIO countTV
+        lift . logg Info $ "Transaction count: " <> T.pack (show cnt)
         lift . logg Info $ "Transaction request keys: " <> T.pack (show _xRequestKeys)
 
 
@@ -439,8 +438,8 @@ loop confDepth tcut f = forever $ do
       countTV <- gets gsCounter
       batch <- asks confBatchSize
       liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
-      count <- liftIO $ readTVarIO countTV
-      lift . logg Info $ "Transaction count: " <> T.pack (show count)
+      cnt <- liftIO $ readTVarIO countTV
+      lift . logg Info $ "Transaction count: " <> T.pack (show cnt)
       lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
       let retrier = retrying policy (const (pure . isRight)) . const
           policy :: RetryPolicyM IO
@@ -987,6 +986,7 @@ defaultContractLoaders v =
 makeContractKeys :: ContractKeyset -> IO (Text, NEL.NonEmpty SomeKeyPairCaps)
 makeContractKeys (ContractKeyset keysetName fps) = do
     readKeys' <- traverse readKeys fps
+    _blah <- genKeyPair defaultScheme
     (keysetName,) . NEL.fromList <$> (mkKeyPairs $ concatMap go readKeys')
     -- return $ M.singleton (either (toS . Sim.getContractName) id contractName) $ NEL.fromList ys
     -- & _
@@ -996,36 +996,32 @@ makeContractKeys (ContractKeyset keysetName fps) = do
     go (pub,priv,addr,scheme) = [ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing]
     -- apiKeyPair (pub,priv,addr,scheme) = mkKeyPairs [ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing]
 
-
 readKeys :: FilePath -> IO (PublicKeyBS, PrivateKeyBS, Text, PPKScheme)
 readKeys fp = do
-    file <- readFile fp
-    let lastMaybe = foldl (const Just) Nothing
-        parsed = lastMaybe
-          $ fmap fst
-          $ filter (null . snd)
-          $ flip readP_to_S file
-          $ flip endBy1 (char '\n')
-          $ flip sepBy1 (char '\n')
-          $ choice [parseKey "public", parseKey "secret", parseKey "address"]
-    case concat <$> parsed of
-      Nothing -> error "failed to read keys"
-      Just m -> do
-        let publicKeyBS = maybe (error "Can't get public key") (PubBS . decodeKey . toS) $ lookup "public" m
-            publicKeyBS' = lookup "public" m
-            privateKeyBS = maybe (error "Can't get private key") (PrivBS . decodeKey . toS) $ lookup "secret" m
-            address = maybe (maybe (error "Can't find address") toS publicKeyBS') toS $ lookup "address" m
-            scheme = ED25519
-        return (publicKeyBS, privateKeyBS, address, scheme)
+  input <- readFile fp
+  either (throwIO . userError . show) pure $ parse keyFileParser fp input
 
-parseKey :: String -> ReadP (String, String)
+keyFileParser :: Stream s m Char => ParsecT s u m (PublicKeyBS, PrivateKeyBS, Text, PPKScheme)
+keyFileParser = do
+  pub <- parseKey "public"
+  void newline
+  priv <- PrivBS . decodeKey . toS <$> parseKey "secret"
+  address <- fmap toS $ option pub $ try $ do
+    void newline
+    void $ string "address"
+    spaces
+    void $ char ':'
+    spaces
+    many1 alphaNum
+  return ((PubBS $ decodeKey $ toS pub),priv,address,ED25519)
+
+parseKey :: Stream s m Char => String -> ParsecT s u m String
 parseKey k = do
   void $ string k
-  skipSpaces
+  spaces
   void $ char ':'
-  skipSpaces
-  v <- munch isAlphaNum
-  return (k, v)
+  spaces
+  count 64 alphaNum
 
 ---------------------------
 -- FOR DEBUGGING IN GHCI --
