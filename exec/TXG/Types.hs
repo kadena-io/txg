@@ -44,8 +44,6 @@ module TXG.Types
   , ChainwebHost(..)
   , TXCount(..)
   , BatchSize(..)
-  , ContractKeyset(..)
-  , DeployContractsArgs(..)
   , PollMap
   , Verbose(..)
   , nelReplicate
@@ -81,7 +79,6 @@ import           Pact.Parse
 import           Pact.Types.API
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
-import           Pact.Types.Crypto ()
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
@@ -108,34 +105,8 @@ data Uniform = Uniform { low :: !Double, high :: !Double }
 defaultTimingDist :: TimingDistribution
 defaultTimingDist = GaussianTD $ Gaussian 1000000 (1000000 / 16)
 
-
-data ContractKeyset = ContractKeyset
-  {
-    cks_keysetName :: Text
-  , cks_keysetFiles :: [FilePath]
-  } deriving (Eq, Show, Generic)
-
-instance ToJSON ContractKeyset where
-  toJSON o = object
-    [
-      "keysetName" .= cks_keysetName o
-    , "keysetFiles" .= cks_keysetFiles o
-    ]
-
-instance FromJSON ContractKeyset where
-  parseJSON = withObject "ContractKeyset" $ \o -> ContractKeyset
-    <$> o .: "keysetName"
-    <*> o .: "keysetFiles"
-
-data DeployContractsArgs =
-   DeployContractsArgs
-   {
-     sendContractsAtHeight :: Integer
-   , contractNamesAndKeys :: Map Sim.ContractName [ContractKeyset]
-   } deriving (Eq, Show, Generic, FromJSON, ToJSON)
-
 data TXCmd
-  = DeployContracts DeployContractsArgs
+  = DeployContracts [Sim.ContractName]
   | RunStandardContracts TimingDistribution
   | RunCoinContract TimingDistribution
   | RunXChainTransfer TimingDistribution

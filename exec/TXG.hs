@@ -49,7 +49,6 @@ import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
-import           Data.String.Conv (toS)
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -64,8 +63,6 @@ import           Pact.Types.Capability
 import qualified Pact.Types.ChainId as CI
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command
-import           Pact.Types.Crypto
-    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), defaultScheme, genKeyPair)
 import           Pact.Types.Exp (Literal(..))
 import           Pact.Types.Gas
 import qualified Pact.Types.Hash as H
@@ -79,7 +76,6 @@ import           System.Exit
 import           System.Random
 import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
-import           Text.Parsec hiding (Error)
 import           Text.Pretty.Simple (pPrintNoColor)
 import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
@@ -529,8 +525,6 @@ pollRequestKeys' cfg cid rkeys = do
   where
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
 
-type LoadedKeyPairCaps = Map Text (NEL.NonEmpty SomeKeyPairCaps)
-
 type ContractLoader
     = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
 
@@ -580,35 +574,6 @@ data ApiError = ApiError
   , apiError_status :: Status
   , apiError_body :: LB.ByteString
   } deriving (Eq,Ord,Show)
-
-loadContractsAtHeight :: Args -> Integer -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
-loadContractsAtHeight config height (ChainwebHost host p2p service) contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat)
-        <- mkTXGConfig Nothing config (HostAddress host service)
-  fix $ \fixloop -> do
-    -- query the latest cut
-    ecut <- queryCut (confManager conf) (HostAddress host p2p) (confVersion conf)
-    case ecut of
-      Left _ -> die "loadContractsAtHeight: Cannot query cut while attempting to load contracts"
-      Right cut -> do
-        let ChainId cid' = head $ nodeChainIds config
-        case cut ^? key "hashes" . key (T.pack $ show cid') . key "height" of
-          Just (Integer h) -> if h < height
-            then threadDelay 1000000 >> fixloop
-            else do
-              forM_ (nodeChainIds config) $ \cid -> do
-                !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
-                ts <- testSomeKeyPairs
-                contracts <- traverse (\f -> f meta ts) contractLoaders
-                pollresponse <- runExceptT $ do
-                  rkeys <- ExceptT $ pactSend conf cid contracts
-                  when vb
-                    $ withConsoleLogger Info
-                    $ logg Info
-                    $ "sent contracts with request key: " <> T.pack (show rkeys)
-                  ExceptT $ pactPoll conf cid rkeys
-                withConsoleLogger Info . logg Info $ T.pack (show pollresponse)
-          _ -> die "loadContractsAtHeight: malformed cut json"
 
 realTransactions
   :: Args
@@ -899,25 +864,12 @@ work cfg = do
     act :: IO ThreadId -> TVar Cut -> TVar TXCount -> ChainwebHost -> LoggerT T.Text IO ()
     act startCutLoop tcut tv chainwebHost@(ChainwebHost h _p2p service) = localScope (const [(hostnameToText h, portToText service)]) $
       case scriptCommand cfg of
-        DeployContracts (DeployContractsArgs _ m) | M.null m -> liftIO $ do
+        DeployContracts [] -> liftIO $ do
           let v = nodeVersion cfg
           loadContracts cfg chainwebHost $ NEL.cons (initAdminKeysetContract v) (defaultContractLoaders v)
-        DeployContracts (DeployContractsArgs height ckss) -> liftIO $ do
+        DeployContracts cs -> liftIO $ do
           let v = nodeVersion cfg
-          let mkKeysetMap :: [ContractKeyset] -> IO (Map Text (NEL.NonEmpty SomeKeyPairCaps))
-              mkKeysetMap cs = do
-                kvs <- traverse makeContractKeys cs
-                return $ M.fromList kvs
-              mkContractMap
-                :: Sim.ContractName
-                -> [ContractKeyset]
-                -> Map Sim.ContractName (Map Text (NEL.NonEmpty SomeKeyPairCaps))
-                -> IO (Map Sim.ContractName (Map Text (NEL.NonEmpty SomeKeyPairCaps)))
-              mkContractMap contractName ks m = do
-                ksm <- mkKeysetMap ks
-                return $ M.insert contractName ksm m
-          toLoad <- M.toList <$> ifoldrM mkContractMap mempty ckss
-          loadContractsAtHeight cfg height chainwebHost $ initAdminKeysetContract v NEL.:| map (\(c, m) -> createLoader v c m) toLoad
+          loadContracts cfg chainwebHost $ initAdminKeysetContract v NEL.:| map (createLoader v) cs
         RunStandardContracts distribution -> do
           void $ liftIO $ startCutLoop
           realTransactions cfg chainwebHost tcut tv distribution
@@ -967,61 +919,19 @@ mainInfo =
 
 -- TODO: This function should also incorporate a user's keyset as well
 -- if it is given.
-createLoader :: ChainwebVersion -> Sim.ContractName -> LoadedKeyPairCaps -> ContractLoader
-createLoader v (Sim.ContractName contractName) m meta kp = do
+createLoader :: ChainwebVersion -> Sim.ContractName -> ContractLoader
+createLoader v (Sim.ContractName contractName) meta kp = do
   theCode <- readFile (contractName <> ".pact")
   adminKS <- testSomeKeyPairs
-  let theData = object $ if M.null m
-        then ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS
-              , T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp
-              ]
-        else M.foldrWithKey (\k ks b -> (k .= fmap (formatB16PubKey . fst) ks) : b) ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS] m
+  -- TODO: theData may change later
+  let theData = object [ "admin-keyset" .= fmap (formatB16PubKey . fst) adminKS, T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp ]
+
   mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
 -- Remember that coin contract is already loaded.
 defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader
 defaultContractLoaders v =
-    NEL.fromList [ \meta ks -> helloWorldContractLoader v meta ks, \meta ks -> simplePaymentsContractLoader v meta ks]
-
-makeContractKeys :: ContractKeyset -> IO (Text, NEL.NonEmpty SomeKeyPairCaps)
-makeContractKeys (ContractKeyset keysetName fps) = do
-    readKeys' <- traverse readKeys fps
-    _blah <- genKeyPair defaultScheme
-    (keysetName,) . NEL.fromList <$> (mkKeyPairs $ concatMap go readKeys')
-    -- return $ M.singleton (either (toS . Sim.getContractName) id contractName) $ NEL.fromList ys
-    -- & _
-    -- <&> NEL.fromList
-    -- <&> M.singleton (either (toS . Sim.getContractName) id contractName)
-  where
-    go (pub,priv,addr,scheme) = [ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing]
-    -- apiKeyPair (pub,priv,addr,scheme) = mkKeyPairs [ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing]
-
-readKeys :: FilePath -> IO (PublicKeyBS, PrivateKeyBS, Text, PPKScheme)
-readKeys fp = do
-  input <- readFile fp
-  either (throwIO . userError . show) pure $ parse keyFileParser fp input
-
-keyFileParser :: Stream s m Char => ParsecT s u m (PublicKeyBS, PrivateKeyBS, Text, PPKScheme)
-keyFileParser = do
-  pub <- parseKey "public"
-  void newline
-  priv <- PrivBS . decodeKey . toS <$> parseKey "secret"
-  address <- fmap toS $ option pub $ try $ do
-    void newline
-    void $ string "address"
-    spaces
-    void $ char ':'
-    spaces
-    many1 alphaNum
-  return ((PubBS $ decodeKey $ toS pub),priv,address,ED25519)
-
-parseKey :: Stream s m Char => String -> ParsecT s u m String
-parseKey k = do
-  void $ string k
-  spaces
-  void $ char ':'
-  spaces
-  count 64 alphaNum
+    NEL.fromList [ helloWorldContractLoader v, simplePaymentsContractLoader v]
 
 ---------------------------
 -- FOR DEBUGGING IN GHCI --
