@@ -41,11 +41,14 @@ module TXG.Types
   , ClientError(..)
   , unsafeManager
     -- * Misc.
+  , ChainwebHost(..)
   , TXCount(..)
   , BatchSize(..)
+  , PollMap
   , Verbose(..)
   , nelReplicate
   , nelZipWith3
+  , toNodeData
   ) where
 
 import           Configuration.Utils hiding (Error, Lens')
@@ -59,22 +62,27 @@ import           Data.Bifunctor
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
 import           Data.Decimal
+import           Data.Function
 import           Data.Generics.Product.Fields (field)
 import qualified Data.List.NonEmpty as NEL
 import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import           Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
+import           Data.Int
 import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
 import qualified Options.Applicative as O
 import           Pact.Parse
+import           Pact.Types.API
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
+import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Utils
 
@@ -101,6 +109,7 @@ data TXCmd
   = DeployContracts [Sim.ContractName]
   | RunStandardContracts TimingDistribution
   | RunCoinContract TimingDistribution
+  | RunXChainTransfer TimingDistribution
   | RunSimpleExpressions TimingDistribution
   | PollRequestKeys Text
   | ListenerRequestKey Text
@@ -158,54 +167,88 @@ listenkeys = ListenerRequestKey . T.decodeUtf8
 -- Args
 -------
 
+
+data ChainwebHost = ChainwebHost
+  {
+    cwh_hostname :: Hostname
+  , cwh_p2pPort :: Port
+  , cwh_servicePort :: Port
+  } deriving (Show, Generic)
+
+instance ToJSON ChainwebHost where
+  toJSON o = object
+    [
+      "hostname" .= cwh_hostname o
+    , "p2pPort" .= cwh_p2pPort o
+    , "servicePort" .= cwh_servicePort o
+    ]
+
+instance FromJSON ChainwebHost where
+  parseJSON = withObject "ChainwebHost" $ \o -> ChainwebHost
+    <$> o .: "hostname"
+    <*> o .: "p2pPort"
+    <*> o .: "servicePort"
+
 data Args = Args
   { scriptCommand   :: !TXCmd
   , nodeChainIds    :: ![ChainId]
-  , hostAddresses   :: ![HostAddress]
+  , isChainweb      :: !Bool
+  , chainwebHosts   :: ![ChainwebHost]
   , nodeVersion     :: !ChainwebVersion
   , batchSize       :: !BatchSize
   , verbose         :: !Verbose
   , gasLimit        :: GasLimit
   , gasPrice        :: GasPrice
   , timetolive      :: TTLSeconds
+  , trackMempoolStat :: !Bool
+  , confirmationDepth :: !Int
   } deriving (Show, Generic)
 
 instance ToJSON Args where
   toJSON o = object
     [ "scriptCommand"   .= scriptCommand o
     , "nodeChainIds"    .= nodeChainIds o
-    , "hostAddresses"   .= hostAddresses o
+    , "isChainweb"      .= isChainweb o
+    , "chainwebHosts"   .= chainwebHosts o
     , "chainwebVersion" .= nodeVersion o
     , "batchSize"       .= batchSize o
     , "verbose"         .= verbose o
     , "gasLimit"        .= gasLimit o
     , "gasPrice"        .= gasPrice o
     , "timetolive"      .= timetolive o
+    , "trackMempoolStat" .= trackMempoolStat o
+    , "confirmationDepth" .= confirmationDepth o
     ]
 
 instance FromJSON (Args -> Args) where
   parseJSON = withObject "Args" $ \o -> id
     <$< field @"scriptCommand"   ..: "scriptCommand"   % o
     <*< field @"nodeChainIds"    ..: "nodeChainIds"    % o
-    <*< field @"hostAddresses"   ..: "hostAddresses"   % o
+    <*< field @"isChainweb"      ..: "isChainweb"      % o
+    <*< field @"chainwebHosts"   ..: "chainwebHosts"   % o
     <*< field @"nodeVersion"     ..: "chainwebVersion" % o
     <*< field @"batchSize"       ..: "batchSize"       % o
     <*< field @"verbose"         ..: "verbose"         % o
     <*< field @"gasLimit"        ..: "gasLimit"        % o
     <*< field @"gasPrice"        ..: "gasPrice"        % o
     <*< field @"timetolive"      ..: "timetolive"      % o
+    <*< field @"trackMempoolStat" ..: "trackMempoolStat" %o
+    <*< field @"confirmationDepth" ..: "confirmationDepth" %o
 
 defaultArgs :: Args
 defaultArgs = Args
   { scriptCommand   = RunSimpleExpressions defaultTimingDist
   , nodeChainIds    = []
-  , hostAddresses   = []
+  , isChainweb      = True
+  , chainwebHosts   = []
   , nodeVersion     = v
   , batchSize       = BatchSize 1
   , verbose         = Verbose False
   , gasLimit = Sim.defGasLimit
   , gasPrice = Sim.defGasPrice
   , timetolive = Sim.defTTL
+  , trackMempoolStat = False
+  , confirmationDepth = 6
   }
   where
     v :: ChainwebVersion
@@ -220,7 +263,7 @@ scriptConfigParser = id
       <> help ("The specific command to run: see examples/transaction-generator-help.md for more detail."
                <> "The only commands supported on the commandline are 'poll', 'listen', 'transfers', and 'simple'.")
   <*< field @"nodeChainIds" %:: pLeftSemigroupalUpdate (pure <$> pChainId)
-  <*< field @"hostAddresses" %:: pLeftSemigroupalUpdate (pure <$> pHostAddress' Nothing)
+  <*< field @"chainwebHosts" %:: pLeftSemigroupalUpdate (pure <$> pChainwebHost)
   <*< field @"nodeVersion" .:: textOption chainwebVersionFromText
       % long "chainweb-version"
       <> short 'v'
@@ -247,6 +290,14 @@ scriptConfigParser = id
       % long "time-to-live"
       <> metavar "SECONDS"
       <> help "The time to live (in seconds) of each auto-generated transaction"
+  <*< field @"trackMempoolStat" .:: option auto
+      % long "track-mempool-stat"
+      <> metavar "BOOL"
+      <> help "Wether to print out mempool related statistics"
+  <*< field @"confirmationDepth" .:: option auto
+      % long "confirmation-depth"
+      <> metavar "INT"
+      <> help "Confirmation depth"
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -256,6 +307,12 @@ scriptConfigParser = id
         GasPrice . ParsedDecimal <$> read' @Decimal "Cannot read gasPrice."
     parseTTL =
         TTLSeconds . ParsedInteger <$> read' @Integer "Cannot read time-to-live."
+
+pChainwebHost :: O.Parser ChainwebHost
+pChainwebHost = ChainwebHost
+  <$> pHostname Nothing
+  <*> pPort (Just "p2p")
+  <*> pPort (Just "service")
 
 pChainId :: O.Parser ChainId
 pChainId = textOption cidFromText
@@ -297,6 +354,7 @@ data TXGConfig = TXGConfig
   , confGasLimit :: GasLimit
   , confGasPrice :: GasPrice
   , confTTL :: TTLSeconds
+  , confTrackMempoolStat :: !Bool
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
@@ -313,6 +371,7 @@ mkTXGConfig mdistribution config hostAddr = do
     , confGasLimit = gasLimit config
     , confGasPrice = gasPrice config
     , confTTL = timetolive config
+    , confTrackMempoolStat = trackMempoolStat config
     }
 
 -- -------------------------------------------------------------------------- --
@@ -334,3 +393,30 @@ nelReplicate n a = NEL.unfoldr f n
 
 nelZipWith3 :: (a -> b -> c -> d) -> NEL.NonEmpty a -> NEL.NonEmpty b -> NEL.NonEmpty c -> NEL.NonEmpty d
 nelZipWith3 f ~(x NEL.:| xs) ~(y NEL.:| ys) ~(z NEL.:| zs) = f x y z NEL.:| zipWith3 f xs ys zs
+
+type PollMap = Map NodeData (Map ChainId [(TimeSpan, RequestKeys)])
+
+data NodeData = NodeData
+  {
+    nodeData_key :: !Int
+  , nodeData_name :: !T.Text
+  } deriving Show
+
+instance Eq NodeData where
+  (==) = on (==) nodeData_key
+
+instance Ord NodeData where
+  compare = on compare nodeData_key
+
+toNodeData :: Int -> ChainwebHost -> NodeData
+toNodeData nodeKey ch = NodeData
+  {
+    nodeData_key = nodeKey
+  , nodeData_name = T.pack $ printf "%s:%s" (show $ cwh_hostname ch) (show $ cwh_servicePort ch)
+  }
+
+data TimeSpan = TimeSpan
+  {
+    start_time :: Int64
+  , end_time :: Int64
+  } deriving Show

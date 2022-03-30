@@ -27,45 +27,30 @@ import           Data.Bifunctor
 import qualified Data.ByteString.Lazy as LB
 import           Data.Decimal
 import           Data.Generics.Product.Fields (field)
+import           Data.Function (on)
+import           Data.Int
+import           Data.Map (Map)
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Text as T
+import qualified Database.SQLite.Simple as SQL
 import           GHC.Generics
 import           Network.HostAddress
 import qualified Options.Applicative as O
 import           Pact.Parse
+import           Pact.Types.API
 import           Pact.Types.ChainMeta
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
 import           Text.Read (readEither)
+import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
-import           TXG.Types
+import           TXG.Types hiding (PollMap)
 import           TXG.Utils
 
 -------
 -- Args
 -------
 
-data ChainwebHost = ChainwebHost
-  {
-    cwh_hostname :: Hostname
-  , cwh_p2pPort :: Port
-  , cwh_servicePort :: Port
-  } deriving (Show, Generic)
-
-
-instance ToJSON ChainwebHost where
-  toJSON o = object
-    [
-      "hostname" .= cwh_hostname o
-    , "p2pPort" .= cwh_p2pPort o
-    , "servicePort" .= cwh_servicePort o
-    ]
-
-instance FromJSON ChainwebHost where
-  parseJSON = withObject "ChainwebHost" $ \o -> ChainwebHost
-    <$> o .: "hostname"
-    <*> o .: "p2pPort"
-    <*> o .: "servicePort"
 
 data MPTArgs = MPTArgs
   {
@@ -81,6 +66,7 @@ data MPTArgs = MPTArgs
   , mpt_nodeVersion       :: !ChainwebVersion
   , mpt_nodeChainIds      :: [ChainId]
   , mpt_dbFile            :: !T.Text
+  , mpt_pollDelay         :: !Int -- in seconds
   } deriving (Show, Generic)
 
 
@@ -99,6 +85,7 @@ instance ToJSON MPTArgs where
     , "nodeVersion"       .= mpt_nodeVersion o
     , "nodeChainIds"      .= mpt_nodeChainIds o
     , "dbFile"            .= mpt_dbFile o
+    , "pollDelay"         .= mpt_pollDelay o
     ]
 
 instance FromJSON (MPTArgs -> MPTArgs) where
@@ -115,6 +102,7 @@ instance FromJSON (MPTArgs -> MPTArgs) where
     <*< field @"mpt_nodeVersion" ..: "nodeVersion" % o
     <*< field @"mpt_nodeChainIds" ..: "nodeChainIds" % o
     <*< field @"mpt_dbFile" ..: "dbFile" % o
+    <*< field @"mpt_pollDelay" ..: "pollDelay" % o
 
 defaultMPTArgs :: MPTArgs
 defaultMPTArgs = MPTArgs
@@ -131,6 +119,7 @@ defaultMPTArgs = MPTArgs
   , mpt_nodeVersion       = Development
   , mpt_nodeChainIds       = []
   , mpt_dbFile          = "mpt-data.sql"
+  , mpt_pollDelay       = 15
   }
 
 mpt_scriptConfigParser :: MParser MPTArgs
@@ -176,6 +165,10 @@ mpt_scriptConfigParser = id
     % long "db-file"
     <> metavar "FILEPATH"
     <> help "File name for sqlite database."
+  <*< field @"mpt_pollDelay" .:: option auto
+    % long "poll-delay"
+    <> metavar "SECONDS"
+    <> help "Time delay between sucessive polls on request keys(s)"
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -214,5 +207,37 @@ data MPTState = MPTState
   { mptGen    :: !(Gen (PrimState IO))
   , mptCounter :: !(TVar TXCount)
   , mptLatestCut :: !(TVar Cut)
+  , mptPollMap :: !(TVar PollMap)
   , mptChains :: !(NESeq ChainId)
   } deriving (Generic)
+
+
+type PollMap = Map NodeData (Map ChainId [(TimeSpan, RequestKeys)])
+
+data NodeData = NodeData
+  {
+    nodeData_key :: !Integer
+  , nodeData_name :: !T.Text
+  } deriving Show
+
+instance Eq NodeData where
+  (==) = on (==) nodeData_key
+
+instance Ord NodeData where
+  compare = on compare nodeData_key
+
+toNodeData :: Integer -> ChainwebHost -> NodeData
+toNodeData nodeKey ch = NodeData
+  {
+    nodeData_key = nodeKey
+  , nodeData_name = T.pack $ printf "%s:%s" (show $ cwh_hostname ch) (show $ cwh_servicePort ch)
+  }
+
+instance SQL.ToRow NodeData where
+  toRow (NodeData identifier name) = SQL.toRow (identifier, name)
+
+data TimeSpan = TimeSpan
+  {
+    start_time :: Int64
+  , end_time :: Int64
+  } deriving Show

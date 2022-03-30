@@ -219,10 +219,14 @@ newtype ContractName = ContractName { getContractName :: String }
   deriving (Eq, Ord, Show, Generic)
   deriving newtype Read
   deriving newtype IsString
+  deriving newtype ToJSON
+  deriving newtype ToJSONKey
+  deriving newtype FromJSON
+  deriving newtype FromJSONKey
 
-instance ToJSON ContractName
+-- instance ToJSON ContractName
 
-instance FromJSON ContractName
+-- instance FromJSON ContractName
 
 parseBytes :: MonadThrow m => Text -> Parser a -> B8.ByteString -> m a
 parseBytes name parser b = either (throwM . TextFormatException . msg) pure $ parseOnly (parser <* endOfInput) b

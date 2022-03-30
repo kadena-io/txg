@@ -23,6 +23,7 @@ import           Pact.Types.ChainId (NetworkId(..))
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command
 import           Pact.Types.Hash
+import           Pact.Types.SPV
 import           System.Random
 import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
@@ -75,6 +76,17 @@ pactPoll
     -> RequestKeys
     -> IO (Either ClientError PollResponses)
 pactPoll n rkeys = pactPostNetwork n "/poll" $ Poll (_rkRequestKeys rkeys)
+
+pactSPV
+    :: Network
+    -> RequestKey
+    -> ChainId
+    -> IO (Either ClientError ContProof)
+pactSPV n rkey targetChain = pactPostNetwork n "/spv" $ object
+    [
+     "requestKey" .= rkey
+    , "targetChainId" .= targetChain
+    ]
 
 pactLocal
     :: Network

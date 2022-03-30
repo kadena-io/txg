@@ -1,0 +1,14 @@
+isChainweb: true
+verbose:
+  verbosity: false
+batchSize: 1
+chainwebVersion: development
+scriptCommand:
+  tag: DeployContracts
+  contents: {"sendTxsAtHeight":5, "contractNames": ["guards", "fungible-util", "pactAgent18", "simpleSales20"]}
+nodeChainIds: [0]
+logHandle: stdout
+chainwebHosts:
+- hostname: mining-node
+  p2pPort: 1789
+  servicePort: 1848
