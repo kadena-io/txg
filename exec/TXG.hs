@@ -171,7 +171,7 @@ _generateXChainTransactions isVerbose = do
   cks <- asks confKeysets
   version <- asks confVersion
   case M.lookup sourceChain cks of
-    Nothing -> error $ printf "Source Chain (%s) is missing Accounts!" (show sourceChain)
+    Nothing -> error $ printf "Source Chain (%s) is missing Accounts!\n" (show sourceChain)
     Just accs -> do
       BatchSize batch <- asks confBatchSize
       tGasLimit <- asks confGasLimit
@@ -236,7 +236,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
   cks <- asks confKeysets
   version <- asks confVersion
   case M.lookup cid cks of
-    Nothing -> error $ printf "%s is missing Accounts!" (show cid)
+    Nothing -> error $ printf "%s is missing Accounts!\n" (show cid)
     Just accs -> do
       BatchSize batch <- asks confBatchSize
       tGasLimit <- asks confGasLimit
@@ -440,16 +440,17 @@ loop confDepth tcut f = forever $ do
       let retrier = retrying policy (const (pure . isRight)) . const
           policy :: RetryPolicyM IO
           policy = exponentialBackoff 50_000 <> limitRetries 10
-      poll_result <- liftIO $ retrier $ pollRequestKeys' config cid rks
-      case poll_result of
-        Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%) %s" (show rks) err
-        Right (poll_start,poll_end,result) -> iforM_ result $ \rk res -> do
-          logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
-          logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
-          let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
-          cstart <- liftIO getCurrentTimeInt64
-          cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
-          logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+      when (confTrackMempoolStat config) $ do
+        poll_result <- liftIO $ retrier $ pollRequestKeys' config cid rks
+        case poll_result of
+          Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show rks) err
+          Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
+            logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
+            logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
+            let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
+            cstart <- liftIO getCurrentTimeInt64
+            cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
+            logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
       forM_ (Compose msgs) $ \m ->
         lift . logg Info $ "Actual transaction: " <> m
@@ -480,7 +481,7 @@ data MempoolStat = MempoolStat
   }
 
 instance Show MempoolStat where
-  show (MempoolStat cid txhash stat) = printf "chainid: %s, txhash: %s, data: %s" (show cid) (show txhash) (show stat)
+  show (MempoolStat cid txhash stat) = printf "chainid: %s, txhash: %s, data: %s\n" (show cid) (show txhash) (show stat)
 
 data TimeSpan = TimeSpan
   {
