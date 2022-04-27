@@ -42,6 +42,7 @@ import           Data.Foldable
 import           Data.Functor.Compose
 -- import qualified Data.List as L
 import           Data.Int
+import           Data.List.Split (chunksOf)
 import qualified Data.List.NonEmpty as NEL
 import qualified Data.HashMap.Strict as HM
 import           Data.Map (Map)
@@ -423,37 +424,43 @@ loop
   -> TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG TXGState m ()
 loop confDepth tcut f = forever $ do
-  (cid, msgs, transactions) <- f
-  config <- ask
-  (requestKeys,start,end) <- liftIO $ trackTime $ pactSend config cid transactions
+    (cid, msgs, transactions) <- f
+    config <- ask
+    (requestKeys,start,end) <- liftIO $ trackTime $ pactSend config cid transactions
 
-  case requestKeys of
-    Left servantError ->
-      lift . logg Error $ T.pack (show servantError)
-    Right rks -> do
-      countTV <- gets gsCounter
-      batch <- asks confBatchSize
-      liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
-      cnt <- liftIO $ readTVarIO countTV
-      lift . logg Info $ "Transaction count: " <> T.pack (show cnt)
-      lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
-      let retrier = retrying policy (const (pure . isRight)) . const
-          policy :: RetryPolicyM IO
-          policy = exponentialBackoff 50_000 <> limitRetries 10
-      when (confTrackMempoolStat config) $ do
-        poll_result <- liftIO $ retrier $ pollRequestKeys' config cid rks
-        case poll_result of
-          Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show rks) err
-          Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
-            logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
-            logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
-            let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
-            cstart <- liftIO getCurrentTimeInt64
-            cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
-            logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+    case requestKeys of
+      Left servantError ->
+        lift . logg Error $ T.pack (show servantError)
+      Right rks -> do
+        countTV <- gets gsCounter
+        batch <- asks confBatchSize
+        liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
+        cnt <- liftIO $ readTVarIO countTV
+        lift . logg Info $ "Transaction count: " <> T.pack (show cnt)
+        lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
+        case confTrackMempoolStat config of
+          Nothing -> pure ()
+          Just p -> do
+            let retrier = retrying policy (const (pure . isRight)) . const
+                policy :: RetryPolicyM IO
+                policy =
+                  exponentialBackoff (pollExponentialBackoffInitTime p)
+                  <> limitRetries (pollRetries p)
+                toChunker = toList . _rkRequestKeys
+            forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
+              poll_result <- liftIO $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
+              case poll_result of
+                Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
+                Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
+                  logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
+                  logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
+                  let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
+                  cstart <- liftIO getCurrentTimeInt64
+                  cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
+                  logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
-      forM_ (Compose msgs) $ \m ->
-        lift . logg Info $ "Actual transaction: " <> m
+            forM_ (Compose msgs) $ \m ->
+              lift . logg Info $ "Actual transaction: " <> m
 
 logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> MempoolStat' -> t m ()
 logStat cid rk ms = lift $ logg Info $ T.pack $ show $ MempoolStat

@@ -45,6 +45,7 @@ module TXG.Types
   , TXCount(..)
   , BatchSize(..)
   , PollMap
+  , PollParams(..)
   , Verbose(..)
   , nelReplicate
   , nelZipWith3
@@ -200,7 +201,7 @@ data Args = Args
   , gasLimit        :: GasLimit
   , gasPrice        :: GasPrice
   , timetolive      :: TTLSeconds
-  , trackMempoolStat :: !Bool
+  , trackMempoolStatConfig :: !(Maybe PollParams)
   , confirmationDepth :: !Int
   } deriving (Show, Generic)
 
@@ -216,7 +217,7 @@ instance ToJSON Args where
     , "gasLimit"        .= gasLimit o
     , "gasPrice"        .= gasPrice o
     , "timetolive"      .= timetolive o
-    , "trackMempoolStat" .= trackMempoolStat o
+    , "trackMempoolStatConfig" .= trackMempoolStatConfig o
     , "confirmationDepth" .= confirmationDepth o
     ]
 
@@ -232,7 +233,7 @@ instance FromJSON (Args -> Args) where
     <*< field @"gasLimit"        ..: "gasLimit"        % o
     <*< field @"gasPrice"        ..: "gasPrice"        % o
     <*< field @"timetolive"      ..: "timetolive"      % o
-    <*< field @"trackMempoolStat" ..: "trackMempoolStat" %o
+    <*< field @"trackMempoolStatConfig" ..: "trackMempoolStatConfig" %o
     <*< field @"confirmationDepth" ..: "confirmationDepth" %o
 
 defaultArgs :: Args
@@ -247,12 +248,20 @@ defaultArgs = Args
   , gasLimit = Sim.defGasLimit
   , gasPrice = Sim.defGasPrice
   , timetolive = Sim.defTTL
-  , trackMempoolStat = False
+  , trackMempoolStatConfig = Just defaultPollParams
   , confirmationDepth = 6
   }
   where
     v :: ChainwebVersion
     v = Development
+
+defaultPollParams :: PollParams
+defaultPollParams = PollParams
+  {
+    pollChunkSize = 1
+  , pollExponentialBackoffInitTime = 50000
+  , pollRetries = 10
+  }
 
 scriptConfigParser :: MParser Args
 scriptConfigParser = id
@@ -290,9 +299,9 @@ scriptConfigParser = id
       % long "time-to-live"
       <> metavar "SECONDS"
       <> help "The time to live (in seconds) of each auto-generated transaction"
-  <*< field @"trackMempoolStat" .:: option auto
-      % long "track-mempool-stat"
-      <> metavar "BOOL"
+  <*< field @"trackMempoolStatConfig" .:: option auto
+      % long "track-mempool-stat-config"
+      <> metavar "CONFIG"
       <> help "Wether to print out mempool related statistics"
   <*< field @"confirmationDepth" .:: option auto
       % long "confirmation-depth"
@@ -354,7 +363,7 @@ data TXGConfig = TXGConfig
   , confGasLimit :: GasLimit
   , confGasPrice :: GasPrice
   , confTTL :: TTLSeconds
-  , confTrackMempoolStat :: !Bool
+  , confTrackMempoolStat :: !(Maybe PollParams)
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
@@ -371,7 +380,7 @@ mkTXGConfig mdistribution config hostAddr = do
     , confGasLimit = gasLimit config
     , confGasPrice = gasPrice config
     , confTTL = timetolive config
-    , confTrackMempoolStat = trackMempoolStat config
+    , confTrackMempoolStat = trackMempoolStatConfig config
     }
 
 -- -------------------------------------------------------------------------- --
@@ -383,6 +392,29 @@ newtype TXCount = TXCount Word
 
 newtype BatchSize = BatchSize Word
   deriving newtype (Integral, Real, Num, Enum, Ord, Eq, Read, Show, ToJSON, FromJSON)
+
+
+data PollParams = PollParams
+  {
+    pollChunkSize :: !Int
+  , pollExponentialBackoffInitTime :: !Int
+  , pollRetries :: !Int
+  }
+  deriving (Show, Generic, Read)
+
+instance ToJSON PollParams where
+  toJSON o = object
+    [
+      "numChunks" .= pollChunkSize o
+    , "exponentialBackoff" .= pollExponentialBackoffInitTime o
+    , "retries" .= pollRetries o
+    ]
+
+instance FromJSON PollParams where
+  parseJSON = withObject "PollParams" $ \o -> PollParams
+      <$> o .: "numChunks"
+      <*> o .: "exponentialBackoff"
+      <*> o .: "retries"
 
 nelReplicate :: Word -> a -> NEL.NonEmpty a
 nelReplicate n a = NEL.unfoldr f n
