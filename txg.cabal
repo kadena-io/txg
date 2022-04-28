@@ -90,6 +90,7 @@ executable txg
     , pretty-simple        >=2.2 && < 4.0
     , primitive            >=0.6
     , retry
+    , split
     , string-conv         >=0.1
     , stm
     , txg

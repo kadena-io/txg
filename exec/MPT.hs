@@ -136,7 +136,7 @@ worker config = do
           , confGasLimit = mpt_gasLimit config
           , confGasPrice = mpt_gasPrice config
           , confTTL = mpt_timetolive config
-          , confTrackMempoolStat = False -- this will be ignored
+          , confTrackMempoolStat = Nothing -- this will be ignored
           }
       cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
       _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
@@ -185,7 +185,7 @@ deleteRequestKey cid rk nd m = M.adjust (M.adjust (mapMaybe go) cid) nd m
         rkss -> Just (ts, RequestKeys $ NEL.fromList rkss)
 
 pollLoop :: IORef (NESeq ChainId) -> Int -> T.Text -> Int -> TVar Cut -> TVar PollMap -> TXGConfig -> IO ()
-pollLoop cids confirmationDepth dbFile secondsDelay tcut trkeys config = forever $ do
+pollLoop cids confirmationDepth' dbFile secondsDelay tcut trkeys config = forever $ do
   threadDelay $ secondsDelay * 1000000
   m <- readTVarIO trkeys
   cid <- readIORef cids >>= pure . NES.head
@@ -220,7 +220,7 @@ pollLoop cids confirmationDepth dbFile secondsDelay tcut trkeys config = forever
                       }
                     let h = fromIntegral $ fromJuste $ json_res ^? _2 . key "blockHeight" . _Integer
                     cstart <- getCurrentTimeInt64
-                    withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
+                    withAsync (loopUntilConfirmationDepth confirmationDepth' cid h tcut) $ \a' -> do
                       cend <- wait a'
                       transmitMempoolStat dbFile $ MempoolStat
                         {
@@ -249,7 +249,7 @@ mkMPTConfig mdistribution manager mpt_config hostAddr =
     , confGasLimit = mpt_gasLimit mpt_config
     , confGasPrice = mpt_gasPrice mpt_config
     , confTTL = mpt_timetolive mpt_config
-    , confTrackMempoolStat = False -- this will be ignored
+    , confTrackMempoolStat = Nothing -- this will be ignored
     }
 
 data ApiError = ApiError
@@ -304,11 +304,11 @@ queryCut mgr (ChainwebHost h p2p _service) version = do
   pure $ responseBody <$> res
 
 loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO Int64
-loopUntilConfirmationDepth confirmationDepth cid startHeight tcut = do
+loopUntilConfirmationDepth confirmationDepth' cid startHeight tcut = do
   atomically $ do
     cut <- readTVar tcut
     let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
-    check (height >= (startHeight + confirmationDepth))
+    check (height >= (startHeight + confirmationDepth'))
   getCurrentTimeInt64
 
 loop
@@ -319,7 +319,7 @@ loop
   -> TVar Cut
   -> TXG MPTState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
   -> TXG MPTState m ()
-loop nodekey dbFile confirmationDepth tcut f = forever $ do
+loop nodekey dbFile confirmationDepth' tcut f = forever $ do
   liftIO $ threadDelay $ 10_000_000
   (cid, msgs, transactions) <- f
   config <- ask
@@ -361,7 +361,7 @@ loop nodekey dbFile confirmationDepth tcut f = forever $ do
               }
             let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
             cstart <- getCurrentTimeInt64
-            withAsync (loopUntilConfirmationDepth confirmationDepth cid h tcut) $ \a' -> do
+            withAsync (loopUntilConfirmationDepth confirmationDepth' cid h tcut) $ \a' -> do
               cend <- wait a'
               transmitMempoolStat dbFile $ MempoolStat
                 {
