@@ -203,6 +203,7 @@ data Args = Args
   , timetolive      :: TTLSeconds
   , trackMempoolStatConfig :: !(Maybe PollParams)
   , confirmationDepth :: !Int
+  , rewindTime :: !Integer
   } deriving (Show, Generic)
 
 instance ToJSON Args where
@@ -219,6 +220,7 @@ instance ToJSON Args where
     , "timetolive"      .= timetolive o
     , "trackMempoolStatConfig" .= trackMempoolStatConfig o
     , "confirmationDepth" .= confirmationDepth o
+    , "rewindTime" .= rewindTime o
     ]
 
 instance FromJSON (Args -> Args) where
@@ -235,6 +237,7 @@ instance FromJSON (Args -> Args) where
     <*< field @"timetolive"      ..: "timetolive"      % o
     <*< field @"trackMempoolStatConfig" ..: "trackMempoolStatConfig" %o
     <*< field @"confirmationDepth" ..: "confirmationDepth" %o
+    <*< field @"rewindTime" ..: "rewindTime" %o
 
 defaultArgs :: Args
 defaultArgs = Args
@@ -250,6 +253,7 @@ defaultArgs = Args
   , timetolive = Sim.defTTL
   , trackMempoolStatConfig = Just defaultPollParams
   , confirmationDepth = 6
+  , rewindTime = 60 * 2 -- 2 minutes
   }
   where
     v :: ChainwebVersion
@@ -307,6 +311,10 @@ scriptConfigParser = id
       % long "confirmation-depth"
       <> metavar "INT"
       <> help "Confirmation depth"
+  <*< field @"rewindTime" .:: option auto
+      % long "rewind-time"
+      <> metavar "INT"
+      <> help "Number of seconds to pre-date transaction creation time"
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -364,6 +372,7 @@ data TXGConfig = TXGConfig
   , confGasPrice :: GasPrice
   , confTTL :: TTLSeconds
   , confTrackMempoolStat :: !(Maybe PollParams)
+  , confRewindTime :: Integer
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
@@ -381,6 +390,7 @@ mkTXGConfig mdistribution config hostAddr = do
     , confGasPrice = gasPrice config
     , confTTL = timetolive config
     , confTrackMempoolStat = trackMempoolStatConfig config
+    , confRewindTime = rewindTime config
     }
 
 -- -------------------------------------------------------------------------- --

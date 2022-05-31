@@ -333,10 +333,10 @@ _nw = unsafePerformIO $ mkNetwork _ver _hostAddr _cid
 {-# NOINLINE _nw #-}
 
 _metaIO :: IO PublicMeta
-_metaIO = makeMeta _cid defTTL defGasPrice defGasLimit
+_metaIO = makeMeta _cid defTTL defGasPrice defGasLimit 0
 
 _metaIO' :: GasLimit -> IO PublicMeta
-_metaIO' = makeMeta _cid defTTL defGasPrice
+_metaIO' g = makeMeta _cid defTTL defGasPrice g 0
 
 _cmd1IO :: IO (Command Text)
 _cmd1IO = do

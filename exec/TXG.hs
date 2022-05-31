@@ -112,7 +112,8 @@ generateSimpleTransactions = do
   tGasLimit <- asks confGasLimit
   tGasPrice <- asks confGasPrice
   tTTL <- asks confTTL
-  (msgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $ f tGasLimit tGasPrice tTTL cid v stdgen
+  tRewindTime <- asks confRewindTime
+  (msgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $ f tGasLimit tGasPrice tTTL cid tRewindTime v stdgen
   -- Delay, so as not to hammer the network.
   delay <- generateDelay
   liftIO $ threadDelay delay
@@ -123,10 +124,11 @@ generateSimpleTransactions = do
         -> GasPrice
         -> CM.TTLSeconds
         -> Sim.ChainId
+        -> Integer
         -> ChainwebVersion
         -> StdGen
         -> IO (Maybe Text, Command Text)
-    f gl gp ttl cid v stdgen = do
+    f gl gp ttl cid rt v stdgen = do
       let (operandA, operandB, op) = flip evalState stdgen $ do
             a <- state $ randomR (1, 100 :: Integer)
             b <- state $ randomR (1, 100 :: Integer)
@@ -139,7 +141,7 @@ generateSimpleTransactions = do
       kps <- testSomeKeyPairs
 
       let theData = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
-      meta <- Sim.makeMeta cid ttl gp gl
+      meta <- Sim.makeMeta cid ttl gp gl rt
       (Nothing,)
         <$> mkExec (T.pack theCode) theData meta
             (NEL.toList kps)
@@ -178,8 +180,9 @@ _generateXChainTransactions isVerbose = do
       tGasLimit <- asks confGasLimit
       tGasPrice <- asks confGasPrice
       tTTL <- asks confTTL
+      tRewindTime <- asks confRewindTime
       (mmsgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $
-          xChainTransfer tGasLimit tGasPrice tTTL version isVerbose sourceChain targetChain $ accounts "coin" accs
+          xChainTransfer tGasLimit tGasPrice tTTL tRewindTime version isVerbose sourceChain targetChain $ accounts "coin" accs
       generateDelay >>= liftIO . threadDelay
       pure (sourceChain, targetChain, mmsgs, cmds)
   where
@@ -190,13 +193,14 @@ _generateXChainTransactions isVerbose = do
         :: GasLimit
         -> GasPrice
         -> CM.TTLSeconds
+        -> Integer
         -> ChainwebVersion
         -> Verbose
         -> Sim.ChainId
         -> Sim.ChainId
         -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
         -> IO (Maybe Text, Command Text)
-    xChainTransfer gl gp ttl version (Verbose vb) sourceChain _targetChain coinaccts = do
+    xChainTransfer gl gp ttl rt version (Verbose vb) sourceChain _targetChain coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest True coinaccts >>= generate
       let msg = if vb then Just $ T.pack (show coinContractRequest) else Nothing
       let acclookup sn@(Sim.Account accsn) =
@@ -211,7 +215,7 @@ _generateXChainTransactions isVerbose = do
                 mkTransferCaps rcvr amt $ acclookup sn
               CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
                 mkTransferCaps rcvr amt (acc, guardd)
-      meta <- Sim.makeMetaWithSender sender ttl gp gl sourceChain
+      meta <- Sim.makeMetaWithSender sender ttl gp gl sourceChain rt
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
     mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
@@ -243,11 +247,12 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
       tGasLimit <- asks confGasLimit
       tGasPrice <- asks confGasPrice
       tTTL <- asks confTTL
+      tRewindTime <- asks confRewindTime
       (mmsgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $
         case contractIndex of
-          CoinContract -> coinContract tGasLimit tGasPrice tTTL version ifCoinOnlyTransfers isVerbose cid $ accounts "coin" accs
+          CoinContract -> coinContract tGasLimit tGasPrice tTTL version ifCoinOnlyTransfers isVerbose cid tRewindTime $ accounts "coin" accs
           HelloWorld -> (Nothing,) <$> (generate fake >>= helloRequest version)
-          Payments -> (Nothing,) <$> payments tGasLimit tGasPrice tTTL version cid (accounts "payment" accs)
+          Payments -> (Nothing,) <$> payments tGasLimit tGasPrice tTTL version cid tRewindTime (accounts "payment" accs)
       generateDelay >>= liftIO . threadDelay
       pure (cid, mmsgs, cmds)
   where
@@ -262,9 +267,10 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         -> Bool
         -> Verbose
         -> Sim.ChainId
+        -> Integer
         -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
         -> IO (Maybe Text, Command Text)
-    coinContract gl gp ttl version transfers (Verbose vb) cid coinaccts = do
+    coinContract gl gp ttl version transfers (Verbose vb) cid rt coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest transfers coinaccts >>= generate
       let msg = if vb then Just $ T.pack (show coinContractRequest) else Nothing
       let acclookup sn@(Sim.Account accsn) =
@@ -279,7 +285,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                 mkTransferCaps rcvr amt $ acclookup sn
               CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
                 mkTransferCaps rcvr amt (acc, guardd)
-      meta <- Sim.makeMetaWithSender sender ttl gp gl cid
+      meta <- Sim.makeMetaWithSender sender ttl gp gl cid rt
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
     mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
@@ -291,18 +297,18 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                   , PLiteral $ LString $ T.pack r
                   , PLiteral $ LDecimal m]
 
-    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
-    payments gl gp ttl v cid paymentAccts = do
+    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Integer -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
+    payments gl gp ttl v cid rt paymentAccts = do
       paymentsRequest <- mkRandomSimplePaymentRequest paymentAccts >>= generate
       case paymentsRequest of
         SPRequestPay fromAccount _ _ -> case M.lookup fromAccount paymentAccts of
           Nothing ->
             error "This account does not have an associated keyset!"
           Just keyset -> do
-            meta <- Sim.makeMeta cid ttl gp gl
+            meta <- Sim.makeMeta cid ttl gp gl rt
             simplePayReq v meta paymentsRequest $ Just keyset
         SPRequestGetBalance _account -> do
-          meta <- Sim.makeMeta cid ttl gp gl
+          meta <- Sim.makeMeta cid ttl gp gl rt
           simplePayReq v meta paymentsRequest Nothing
         _ -> error "SimplePayments.CreateAccount code generation not supported"
 
@@ -538,10 +544,10 @@ type ContractLoader
 
 loadContracts :: Args -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
 loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat)
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat rt)
         <- mkTXGConfig Nothing config (HostAddress h service)
   forM_ (nodeChainIds config) $ \cid -> do
-    !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
+    !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit rt
     ts <- testSomeKeyPairs
     contracts <- traverse (\f -> f meta ts) contractLoaders
     pollresponse <- runExceptT $ do
@@ -591,7 +597,7 @@ realTransactions
   -> TimingDistribution
   -> LoggerT T.Text IO ()
 realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
-  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat)
+  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat rt)
         <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
@@ -599,7 +605,7 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
                $ nodeChainIds config
 
   accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
-    !meta <- liftIO $ Sim.makeMeta cid ttl' tgasPrice tgasLimit
+    !meta <- liftIO $ Sim.makeMeta cid ttl' tgasPrice tgasLimit rt
     (paymentKS, paymentAcc) <- liftIO $ NEL.unzip <$> Sim.createPaymentsAccounts v meta
     (coinKS, coinAcc) <- liftIO $ NEL.unzip <$> Sim.createCoinAccounts v meta
     pollresponse <- liftIO . runExceptT $ do
@@ -652,7 +658,7 @@ _realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution
                 $ nodeChainIds config
     accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
       let f (Sim.Account sender) = do
-            meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid
+            meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid (confRewindTime cfg)
             Sim.createCoinAccount (confVersion cfg) meta sender
       (coinKS, _coinAcc) <-
           liftIO $ unzip <$> traverse f Sim.coinAccountNames
@@ -697,7 +703,7 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
 
   accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
     let f (Sim.Account sender) = do
-          meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid
+          meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid (confRewindTime cfg)
           Sim.createCoinAccount (confVersion cfg) meta sender
     (coinKS, _coinAcc) <-
         liftIO $ unzip <$> traverse f Sim.coinAccountNames
@@ -784,7 +790,7 @@ singleTransaction args (ChainwebHost h _p2p service) (SingleTX c cid)
   | otherwise = do
       cfg <- mkTXGConfig Nothing args (HostAddress h service)
       kps <- testSomeKeyPairs
-      meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg)
+      meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) (confRewindTime cfg)
       let v = confVersion cfg
       cmd <- mkExec c (datum kps) meta
         (NEL.toList kps)
