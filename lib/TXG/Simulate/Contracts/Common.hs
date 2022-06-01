@@ -201,7 +201,7 @@ makeMeta cid ttl gasPrice gasLimit rewindTime = do
         , CM._pmGasLimit = gasLimit
         , CM._pmGasPrice = gasPrice
         , CM._pmTTL = ttl
-        , CM._pmCreationTime = t + coerce rewindTime
+        , CM._pmCreationTime = t - coerce rewindTime
         }
 
 defGasLimit :: GasLimit
