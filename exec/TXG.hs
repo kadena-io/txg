@@ -447,7 +447,10 @@ loop confDepth tcut f = forever $ do
         case confTrackMempoolStat config of
           Nothing -> pure ()
           Just p -> do
-            let retrier = retrying policy (const (pure . isRight)) . const
+            let retrier = retrying policy (const retryIfPollEmptyAlso) . const
+                retryIfPollEmptyAlso = \case
+                  Left s -> pure $ s == "Failure no result returned"
+                  Right _ -> pure False
                 policy :: RetryPolicyM IO
                 policy =
                   exponentialBackoff (pollExponentialBackoffInitTime p)
@@ -510,10 +513,10 @@ data MempoolStat' =
   | TimeUntilConfirmationDepth TimeSpan
 
 instance Show MempoolStat' where
-  show = show . \case
-    TimeUntilMempoolAcceptance t -> t
-    TimeUntilBlockInclusion t -> t
-    TimeUntilConfirmationDepth t -> t
+  show = \case
+    TimeUntilMempoolAcceptance t -> "time-until-mempool-acceptance: " ++ show t
+    TimeUntilBlockInclusion t -> "time-until-block-inclusion: " ++ show t
+    TimeUntilConfirmationDepth t -> "time-until-confirmation-depth: " ++ show t
 
 getCurrentTimeInt64 :: IO Int64
 getCurrentTimeInt64 = do
