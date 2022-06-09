@@ -505,7 +505,7 @@ data TimeSpan = TimeSpan
   , end_time :: Int64
   }
 instance Show TimeSpan where
-  show (TimeSpan s e) = show (s,e)
+  show (TimeSpan s e) = printf "%d microseconds" $ e - s
 
 data MempoolStat' =
   TimeUntilMempoolAcceptance TimeSpan
