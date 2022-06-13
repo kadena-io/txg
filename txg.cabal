@@ -93,6 +93,7 @@ executable txg
     , split
     , string-conv         >=0.1
     , stm
+    , transformers
     , txg
     , yet-another-logger   >=0.3
 

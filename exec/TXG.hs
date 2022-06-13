@@ -33,6 +33,7 @@ import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
+import           Control.Monad.Trans.Writer.CPS hiding (listen)
 import           Control.Retry
 import           Data.Aeson.Lens
 import           Data.Generics.Product.Fields (field)
@@ -50,6 +51,7 @@ import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
+import           Data.String (IsString(..))
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -422,6 +424,13 @@ _xChainLoop f = forever $ do
         lift . logg Info $ "Transaction request keys: " <> T.pack (show _xRequestKeys)
 
 
+newtype RetryErrors = RetryErrors (HM.HashMap Text [Value])
+
+instance Semigroup RetryErrors where
+  (RetryErrors o1) <> (RetryErrors o2) = RetryErrors $ HM.unionWith mappend o1 o2
+
+instance Monoid RetryErrors where
+  mempty = RetryErrors mempty
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
@@ -449,35 +458,46 @@ loop confDepth tcut f = forever $ do
           Just p -> do
             let retrier = retrying policy (const retryIfPollEmptyAlso) . const
                 retryIfPollEmptyAlso = \case
-                  Left s -> pure $ s == "Failure no result returned"
+                  Left jvalue -> case jvalue of
+                    Object o -> do
+                      tell $ RetryErrors $ fmap pure o
+                      pure $ case HM.lookup "internalError"  o of
+                        Just "Failure no result returned" -> True
+                        _ -> False
+                    _ -> fail "impossible"
                   Right _ -> pure False
-                policy :: RetryPolicyM IO
                 policy =
                   exponentialBackoff (pollExponentialBackoffInitTime p)
                   <> limitRetries (pollRetries p)
                 toChunker = toList . _rkRequestKeys
             forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
-              poll_result <- liftIO $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
+              (poll_result,RetryErrors errs) <- liftIO $ runWriterT $ retrier $ liftIO $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
               case poll_result of
-                Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
+                Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) $ encodeToText err
                 Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
-                  logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
-                  logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
+                  -- display any errors that accumulated while retrying
+                  iforM_ errs $ \k messages -> do
+                    logStat cid rk (Left k)
+                    forM_ messages $ logStat cid rk . Left . encodeToText
+                  logStat cid rk (Right $ TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
+                  logStat cid rk (Right $ TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
                   let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
                   cstart <- liftIO getCurrentTimeInt64
                   cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
-                  logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+                  logStat cid rk (Right $ TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
             forM_ (Compose msgs) $ \m ->
               lift . logg Info $ "Actual transaction: " <> m
 
-logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> MempoolStat' -> t m ()
-logStat cid rk ms = lift $ logg Info $ T.pack $ show $ MempoolStat
-  {
-    ms_chainid = cid
-  , ms_txhash = rk
-  , ms_stat = ms
-  }
+logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> Either Text MempoolStat' -> t m ()
+logStat cid rk = \case
+  Right ms -> lift $ logg Info $ T.pack $ show $ MempoolStat
+    {
+      ms_chainid = cid
+    , ms_txhash = rk
+    , ms_stat = ms
+    }
+  Left other -> lift $ logg Info other
 
 type BlockHeight = Int
 
@@ -531,16 +551,26 @@ trackTime act = do
   t2 <- getCurrentTimeInt64
   return (r,t1,t2)
 
-pollRequestKeys' :: TXGConfig -> ChainId -> RequestKeys -> IO (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
+pollRequestKeys'
+  :: TXGConfig
+  -> ChainId
+  -> RequestKeys
+  -> IO (Either Value (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
 pollRequestKeys' cfg cid rkeys = do
     (response, start, end) <- trackTime $ pactPoll cfg cid rkeys
     case response of
-      Left _ -> pure $ Left "Failure"
+      Left (ClientError t) -> pure $ either (Left . internalError) Left $ eitherDecode @Value $ LB.fromStrict $ T.encodeUtf8 t
       Right (PollResponses as)
-        | null as -> pure $ Left "Failure no result returned"
+        | null as -> pure $ Left $ internalError @T.Text "Failure no result returned"
         | otherwise -> pure $ Right $ (start, end, fmap f as)
   where
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
+    internalError :: (ToJSON s, IsString s) => s -> Value
+    internalError s =
+      object
+        [
+          "internalError" .= s
+        ]
 
 type ContractLoader
     = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
