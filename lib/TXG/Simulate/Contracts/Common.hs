@@ -45,6 +45,7 @@ import           Data.Aeson
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
+import           Data.Coerce (coerce)
 import           Data.Char
 import           Data.Decimal
 import           Data.FileEmbed
@@ -61,6 +62,7 @@ import qualified Data.Yaml as Y
 import           Fake
 import           GHC.Generics
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
+import           Pact.Parse (ParsedInteger(..))
 import qualified Pact.Types.ChainId as CM
 import qualified Pact.Types.ChainMeta as CM
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
@@ -189,8 +191,8 @@ distinctPairsSendersOverList xs@(_first:_second:_rest) = do
 distinctPairsSendersOverList _ = error "distinctPairSendersOverList: Please give at least two accounts!"
 
 -- hardcoded sender (sender00)
-makeMeta :: ChainId -> CM.TTLSeconds -> GasPrice -> GasLimit -> IO CM.PublicMeta
-makeMeta cid ttl gasPrice gasLimit = do
+makeMeta :: ChainId -> CM.TTLSeconds -> GasPrice -> GasLimit -> Integer -> IO CM.PublicMeta
+makeMeta cid ttl gasPrice gasLimit rewindTime = do
     t <- currentTxTime
     return $ CM.PublicMeta
         {
@@ -199,7 +201,7 @@ makeMeta cid ttl gasPrice gasLimit = do
         , CM._pmGasLimit = gasLimit
         , CM._pmGasPrice = gasPrice
         , CM._pmTTL = ttl
-        , CM._pmCreationTime = t
+        , CM._pmCreationTime = t - coerce rewindTime
         }
 
 defGasLimit :: GasLimit
@@ -211,9 +213,9 @@ defGasPrice = 0.001
 defTTL :: CM.TTLSeconds
 defTTL = 3600
 
-makeMetaWithSender :: String -> CM.TTLSeconds -> GasPrice -> GasLimit -> ChainId -> IO CM.PublicMeta
-makeMetaWithSender sender ttl gasPrice gasLimit cid =
-    set CM.pmSender (T.pack sender) <$> makeMeta cid ttl gasPrice gasLimit
+makeMetaWithSender :: String -> CM.TTLSeconds -> GasPrice -> GasLimit -> ChainId -> Integer -> IO CM.PublicMeta
+makeMetaWithSender sender ttl gasPrice gasLimit cid rewindTime =
+    set CM.pmSender (T.pack sender) <$> makeMeta cid ttl gasPrice gasLimit rewindTime
 
 newtype ContractName = ContractName { getContractName :: String }
   deriving (Eq, Ord, Show, Generic)

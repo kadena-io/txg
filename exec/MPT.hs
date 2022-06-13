@@ -137,6 +137,7 @@ worker config = do
           , confGasPrice = mpt_gasPrice config
           , confTTL = mpt_timetolive config
           , confTrackMempoolStat = Nothing -- this will be ignored
+          , confRewindTime =  0 -- this will be ignored
           }
       cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
       _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
@@ -250,6 +251,7 @@ mkMPTConfig mdistribution manager mpt_config hostAddr =
     , confGasPrice = mpt_gasPrice mpt_config
     , confTTL = mpt_timetolive mpt_config
     , confTrackMempoolStat = Nothing -- this will be ignored
+    , confRewindTime = 0 -- this will be ignored
     }
 
 data ApiError = ApiError
@@ -449,7 +451,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                 mkTransferCaps rcvr amt $ acclookup sn
               CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
                 mkTransferCaps rcvr amt (acc, guardd)
-      meta <- Sim.makeMetaWithSender sender ttl gp gl cid
+      meta <- Sim.makeMetaWithSender sender ttl gp gl cid 0
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
     mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
@@ -469,10 +471,10 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
           Nothing ->
             error "This account does not have an associated keyset!"
           Just keyset -> do
-            meta <- Sim.makeMeta cid ttl gp gl
+            meta <- Sim.makeMeta cid ttl gp gl 0
             simplePayReq v meta paymentsRequest $ Just keyset
         SPRequestGetBalance _account -> do
-          meta <- Sim.makeMeta cid ttl gp gl
+          meta <- Sim.makeMeta cid ttl gp gl 0
           simplePayReq v meta paymentsRequest Nothing
         _ -> error "SimplePayments.CreateAccount code generation not supported"
 
@@ -492,7 +494,7 @@ coinTransfers nodekey config tv tcut trkeys cfg = do
 
     accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
       let f (Sim.Account sender) = do
-            !meta <- liftIO (Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid)
+            !meta <- liftIO (Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid 0)
             Sim.createCoinAccount (confVersion cfg) meta sender
       (coinKS, _coinAcc) <-
         liftIO $ unzip <$> traverse f Sim.coinAccountNames

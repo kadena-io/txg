@@ -33,6 +33,7 @@ import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
+import           Control.Monad.Trans.Writer.CPS hiding (listen)
 import           Control.Retry
 import           Data.Aeson.Lens
 import           Data.Generics.Product.Fields (field)
@@ -50,6 +51,7 @@ import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
+import           Data.String (IsString(..))
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -112,7 +114,8 @@ generateSimpleTransactions = do
   tGasLimit <- asks confGasLimit
   tGasPrice <- asks confGasPrice
   tTTL <- asks confTTL
-  (msgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $ f tGasLimit tGasPrice tTTL cid v stdgen
+  tRewindTime <- asks confRewindTime
+  (msgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $ f tGasLimit tGasPrice tTTL cid tRewindTime v stdgen
   -- Delay, so as not to hammer the network.
   delay <- generateDelay
   liftIO $ threadDelay delay
@@ -123,10 +126,11 @@ generateSimpleTransactions = do
         -> GasPrice
         -> CM.TTLSeconds
         -> Sim.ChainId
+        -> Integer
         -> ChainwebVersion
         -> StdGen
         -> IO (Maybe Text, Command Text)
-    f gl gp ttl cid v stdgen = do
+    f gl gp ttl cid rt v stdgen = do
       let (operandA, operandB, op) = flip evalState stdgen $ do
             a <- state $ randomR (1, 100 :: Integer)
             b <- state $ randomR (1, 100 :: Integer)
@@ -139,7 +143,7 @@ generateSimpleTransactions = do
       kps <- testSomeKeyPairs
 
       let theData = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
-      meta <- Sim.makeMeta cid ttl gp gl
+      meta <- Sim.makeMeta cid ttl gp gl rt
       (Nothing,)
         <$> mkExec (T.pack theCode) theData meta
             (NEL.toList kps)
@@ -178,8 +182,9 @@ _generateXChainTransactions isVerbose = do
       tGasLimit <- asks confGasLimit
       tGasPrice <- asks confGasPrice
       tTTL <- asks confTTL
+      tRewindTime <- asks confRewindTime
       (mmsgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $
-          xChainTransfer tGasLimit tGasPrice tTTL version isVerbose sourceChain targetChain $ accounts "coin" accs
+          xChainTransfer tGasLimit tGasPrice tTTL tRewindTime version isVerbose sourceChain targetChain $ accounts "coin" accs
       generateDelay >>= liftIO . threadDelay
       pure (sourceChain, targetChain, mmsgs, cmds)
   where
@@ -190,13 +195,14 @@ _generateXChainTransactions isVerbose = do
         :: GasLimit
         -> GasPrice
         -> CM.TTLSeconds
+        -> Integer
         -> ChainwebVersion
         -> Verbose
         -> Sim.ChainId
         -> Sim.ChainId
         -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
         -> IO (Maybe Text, Command Text)
-    xChainTransfer gl gp ttl version (Verbose vb) sourceChain _targetChain coinaccts = do
+    xChainTransfer gl gp ttl rt version (Verbose vb) sourceChain _targetChain coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest True coinaccts >>= generate
       let msg = if vb then Just $ T.pack (show coinContractRequest) else Nothing
       let acclookup sn@(Sim.Account accsn) =
@@ -211,7 +217,7 @@ _generateXChainTransactions isVerbose = do
                 mkTransferCaps rcvr amt $ acclookup sn
               CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
                 mkTransferCaps rcvr amt (acc, guardd)
-      meta <- Sim.makeMetaWithSender sender ttl gp gl sourceChain
+      meta <- Sim.makeMetaWithSender sender ttl gp gl sourceChain rt
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
     mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
@@ -243,11 +249,12 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
       tGasLimit <- asks confGasLimit
       tGasPrice <- asks confGasPrice
       tTTL <- asks confTTL
+      tRewindTime <- asks confRewindTime
       (mmsgs, cmds) <- liftIO . fmap NEL.unzip . sequenceA . nelReplicate batch $
         case contractIndex of
-          CoinContract -> coinContract tGasLimit tGasPrice tTTL version ifCoinOnlyTransfers isVerbose cid $ accounts "coin" accs
+          CoinContract -> coinContract tGasLimit tGasPrice tTTL version ifCoinOnlyTransfers isVerbose cid tRewindTime $ accounts "coin" accs
           HelloWorld -> (Nothing,) <$> (generate fake >>= helloRequest version)
-          Payments -> (Nothing,) <$> payments tGasLimit tGasPrice tTTL version cid (accounts "payment" accs)
+          Payments -> (Nothing,) <$> payments tGasLimit tGasPrice tTTL version cid tRewindTime (accounts "payment" accs)
       generateDelay >>= liftIO . threadDelay
       pure (cid, mmsgs, cmds)
   where
@@ -262,9 +269,10 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         -> Bool
         -> Verbose
         -> Sim.ChainId
+        -> Integer
         -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
         -> IO (Maybe Text, Command Text)
-    coinContract gl gp ttl version transfers (Verbose vb) cid coinaccts = do
+    coinContract gl gp ttl version transfers (Verbose vb) cid rt coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest transfers coinaccts >>= generate
       let msg = if vb then Just $ T.pack (show coinContractRequest) else Nothing
       let acclookup sn@(Sim.Account accsn) =
@@ -279,7 +287,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                 mkTransferCaps rcvr amt $ acclookup sn
               CoinTransferAndCreate (SenderName acc) rcvr (Guard guardd) amt ->
                 mkTransferCaps rcvr amt (acc, guardd)
-      meta <- Sim.makeMetaWithSender sender ttl gp gl cid
+      meta <- Sim.makeMetaWithSender sender ttl gp gl cid rt
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
     mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
@@ -291,18 +299,18 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                   , PLiteral $ LString $ T.pack r
                   , PLiteral $ LDecimal m]
 
-    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
-    payments gl gp ttl v cid paymentAccts = do
+    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Integer -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
+    payments gl gp ttl v cid rt paymentAccts = do
       paymentsRequest <- mkRandomSimplePaymentRequest paymentAccts >>= generate
       case paymentsRequest of
         SPRequestPay fromAccount _ _ -> case M.lookup fromAccount paymentAccts of
           Nothing ->
             error "This account does not have an associated keyset!"
           Just keyset -> do
-            meta <- Sim.makeMeta cid ttl gp gl
+            meta <- Sim.makeMeta cid ttl gp gl rt
             simplePayReq v meta paymentsRequest $ Just keyset
         SPRequestGetBalance _account -> do
-          meta <- Sim.makeMeta cid ttl gp gl
+          meta <- Sim.makeMeta cid ttl gp gl rt
           simplePayReq v meta paymentsRequest Nothing
         _ -> error "SimplePayments.CreateAccount code generation not supported"
 
@@ -416,6 +424,13 @@ _xChainLoop f = forever $ do
         lift . logg Info $ "Transaction request keys: " <> T.pack (show _xRequestKeys)
 
 
+newtype RetryErrors = RetryErrors (HM.HashMap Text [Value])
+
+instance Semigroup RetryErrors where
+  (RetryErrors o1) <> (RetryErrors o2) = RetryErrors $ HM.unionWith mappend o1 o2
+
+instance Monoid RetryErrors where
+  mempty = RetryErrors mempty
 
 loop
   :: (MonadIO m, MonadLog T.Text m)
@@ -441,34 +456,48 @@ loop confDepth tcut f = forever $ do
         case confTrackMempoolStat config of
           Nothing -> pure ()
           Just p -> do
-            let retrier = retrying policy (const (pure . isRight)) . const
-                policy :: RetryPolicyM IO
+            let retrier = retrying policy (const retryIfPollEmptyAlso) . const
+                retryIfPollEmptyAlso = \case
+                  Left jvalue -> case jvalue of
+                    Object o -> do
+                      tell $ RetryErrors $ fmap pure o
+                      pure $ case HM.lookup "internalError"  o of
+                        Just "Failure no result returned" -> True
+                        _ -> False
+                    _ -> fail "impossible"
+                  Right _ -> pure False
                 policy =
                   exponentialBackoff (pollExponentialBackoffInitTime p)
                   <> limitRetries (pollRetries p)
                 toChunker = toList . _rkRequestKeys
             forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
-              poll_result <- liftIO $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
+              (poll_result,RetryErrors errs) <- liftIO $ runWriterT $ retrier $ liftIO $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
               case poll_result of
-                Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
+                Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) $ encodeToText err
                 Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
-                  logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
-                  logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
+                  -- display any errors that accumulated while retrying
+                  iforM_ errs $ \k messages -> do
+                    logStat cid rk (Left k)
+                    forM_ messages $ logStat cid rk . Left . encodeToText
+                  logStat cid rk (Right $ TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
+                  logStat cid rk (Right $ TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
                   let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
                   cstart <- liftIO getCurrentTimeInt64
                   cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
-                  logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+                  logStat cid rk (Right $ TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
             forM_ (Compose msgs) $ \m ->
               lift . logg Info $ "Actual transaction: " <> m
 
-logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> MempoolStat' -> t m ()
-logStat cid rk ms = lift $ logg Info $ T.pack $ show $ MempoolStat
-  {
-    ms_chainid = cid
-  , ms_txhash = rk
-  , ms_stat = ms
-  }
+logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> Either Text MempoolStat' -> t m ()
+logStat cid rk = \case
+  Right ms -> lift $ logg Info $ T.pack $ show $ MempoolStat
+    {
+      ms_chainid = cid
+    , ms_txhash = rk
+    , ms_stat = ms
+    }
+  Left other -> lift $ logg Info other
 
 type BlockHeight = Int
 
@@ -496,7 +525,7 @@ data TimeSpan = TimeSpan
   , end_time :: Int64
   }
 instance Show TimeSpan where
-  show (TimeSpan s e) = show (s,e)
+  show (TimeSpan s e) = printf "%d microseconds" $ e - s
 
 data MempoolStat' =
   TimeUntilMempoolAcceptance TimeSpan
@@ -504,10 +533,10 @@ data MempoolStat' =
   | TimeUntilConfirmationDepth TimeSpan
 
 instance Show MempoolStat' where
-  show = show . \case
-    TimeUntilMempoolAcceptance t -> t
-    TimeUntilBlockInclusion t -> t
-    TimeUntilConfirmationDepth t -> t
+  show = \case
+    TimeUntilMempoolAcceptance t -> "time-until-mempool-acceptance: " ++ show t
+    TimeUntilBlockInclusion t -> "time-until-block-inclusion: " ++ show t
+    TimeUntilConfirmationDepth t -> "time-until-confirmation-depth: " ++ show t
 
 getCurrentTimeInt64 :: IO Int64
 getCurrentTimeInt64 = do
@@ -522,26 +551,36 @@ trackTime act = do
   t2 <- getCurrentTimeInt64
   return (r,t1,t2)
 
-pollRequestKeys' :: TXGConfig -> ChainId -> RequestKeys -> IO (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
+pollRequestKeys'
+  :: TXGConfig
+  -> ChainId
+  -> RequestKeys
+  -> IO (Either Value (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
 pollRequestKeys' cfg cid rkeys = do
     (response, start, end) <- trackTime $ pactPoll cfg cid rkeys
     case response of
-      Left _ -> pure $ Left "Failure"
+      Left (ClientError t) -> pure $ either (Left . internalError) Left $ eitherDecode @Value $ LB.fromStrict $ T.encodeUtf8 t
       Right (PollResponses as)
-        | null as -> pure $ Left "Failure no result returned"
+        | null as -> pure $ Left $ internalError @T.Text "Failure no result returned"
         | otherwise -> pure $ Right $ (start, end, fmap f as)
   where
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
+    internalError :: (ToJSON s, IsString s) => s -> Value
+    internalError s =
+      object
+        [
+          "internalError" .= s
+        ]
 
 type ContractLoader
     = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
 
 loadContracts :: Args -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
 loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat)
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat rt)
         <- mkTXGConfig Nothing config (HostAddress h service)
   forM_ (nodeChainIds config) $ \cid -> do
-    !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
+    !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit rt
     ts <- testSomeKeyPairs
     contracts <- traverse (\f -> f meta ts) contractLoaders
     pollresponse <- runExceptT $ do
@@ -591,7 +630,7 @@ realTransactions
   -> TimingDistribution
   -> LoggerT T.Text IO ()
 realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
-  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat)
+  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat rt)
         <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
@@ -599,7 +638,7 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
                $ nodeChainIds config
 
   accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
-    !meta <- liftIO $ Sim.makeMeta cid ttl' tgasPrice tgasLimit
+    !meta <- liftIO $ Sim.makeMeta cid ttl' tgasPrice tgasLimit rt
     (paymentKS, paymentAcc) <- liftIO $ NEL.unzip <$> Sim.createPaymentsAccounts v meta
     (coinKS, coinAcc) <- liftIO $ NEL.unzip <$> Sim.createCoinAccounts v meta
     pollresponse <- liftIO . runExceptT $ do
@@ -652,7 +691,7 @@ _realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution
                 $ nodeChainIds config
     accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
       let f (Sim.Account sender) = do
-            meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid
+            meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid (confRewindTime cfg)
             Sim.createCoinAccount (confVersion cfg) meta sender
       (coinKS, _coinAcc) <-
           liftIO $ unzip <$> traverse f Sim.coinAccountNames
@@ -697,7 +736,7 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
 
   accountMap <- fmap (M.fromList . toList) . forM chains $ \cid -> do
     let f (Sim.Account sender) = do
-          meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid
+          meta <- liftIO $ Sim.makeMetaWithSender sender (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) cid (confRewindTime cfg)
           Sim.createCoinAccount (confVersion cfg) meta sender
     (coinKS, _coinAcc) <-
         liftIO $ unzip <$> traverse f Sim.coinAccountNames
@@ -784,7 +823,7 @@ singleTransaction args (ChainwebHost h _p2p service) (SingleTX c cid)
   | otherwise = do
       cfg <- mkTXGConfig Nothing args (HostAddress h service)
       kps <- testSomeKeyPairs
-      meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg)
+      meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg) (confRewindTime cfg)
       let v = confVersion cfg
       cmd <- mkExec c (datum kps) meta
         (NEL.toList kps)
