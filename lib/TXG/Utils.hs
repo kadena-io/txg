@@ -63,7 +63,7 @@ import Control.Monad.Catch
 
 import Data.Bifunctor
 import qualified Data.ByteString as B
-import Data.ByteString.Base64.URL
+import qualified Data.ByteString.Base64.URL as B64U
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.List.NonEmpty as NEL
 import Data.Maybe
@@ -88,6 +88,7 @@ import Pact.Types.API
 import qualified Pact.Types.ChainMeta as CM
 import Pact.Types.Command
 import Pact.Types.Hash
+import qualified Pact.JSON.Encode as J
 
 import Text.Read (readEither)
 
@@ -130,6 +131,9 @@ newtype ChainId = ChainId Int
     deriving (Eq, Ord, Num, Generic)
     deriving newtype (ToJSON, FromJSON, Read, Show)
 
+instance J.Encode ChainId where
+    build (ChainId i) = J.build $ J.Base10 i
+
 cidToText :: ChainId -> T.Text
 cidToText (ChainId i) = T.pack $ show i
 
@@ -153,20 +157,26 @@ instance Show TransactionHash where
     show = T.unpack . T.decodeUtf8 . BL.toStrict . encode
 
 instance ToJSON TransactionHash where
-  toJSON (TransactionHash x) = toJSON $! encodeBase64Unpadded x
+  toJSON (TransactionHash x) = toJSON $! B64U.encodeBase64Unpadded x
 
 instance FromJSON TransactionHash where
   parseJSON = withText "TransactionHash"
     $! either (fail . T.unpack) return
     . fmap TransactionHash
-    . decodeBase64Unpadded
+    . B64U.decodeBase64Unpadded
     . T.encodeUtf8
 
+instance J.Encode TransactionHash where
+    build (TransactionHash x) = J.build $ encodeB64UrlNoPaddingText x
+
+encodeB64UrlNoPaddingText :: B.ByteString -> T.Text
+encodeB64UrlNoPaddingText = T.dropWhileEnd (== '=') . B64U.encodeBase64Unpadded
 -- -------------------------------------------------------------------------- --
 -- Time
 
 currentTxTime :: IO CM.TxCreationTime
 currentTxTime = CM.TxCreationTime . ParsedInteger . round <$> getPOSIXTime
+
 
 -- -------------------------------------------------------------------------- --
 -- Misc Utils
@@ -199,7 +209,7 @@ newtype ClientError = ClientError T.Text
 instance Exception ClientError
 
 post
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Manager
     -> HostAddress
@@ -228,12 +238,12 @@ post mgr hostAddr urlPath s body = do
         , port = fromIntegral $ _hostAddressPort hostAddr
         , path = T.encodeUtf8 urlPath
         , requestHeaders = [("content-type", "application/json")]
-        , requestBody = RequestBodyLBS $ encode body
+        , requestBody = RequestBodyLBS $ J.encode body
         , responseTimeout = responseTimeoutMicro $ 1000000 * 60 * 4
         }
 
 pactPost
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Manager
     -> HostAddress
@@ -246,7 +256,7 @@ pactPost mgr hostAddr v cid pactPath
     = post mgr hostAddr (pactBasePath v cid <> pactPath) False
 
 mempoolPost
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Manager
     -> HostAddress
@@ -306,12 +316,18 @@ listen
     -> IO (Either ClientError ListenResponse)
 listen m a v c rk = pactPost m a v c "/listen" (ListenerRequest rk)
 
+newtype TransactionHashes = TransactionHashes [TransactionHash]
+    deriving (Show, Eq, Ord, Generic)
+
+instance J.Encode TransactionHashes where
+    build (TransactionHashes xs) = J.build $ J.Array xs
+
 mempoolMember
     :: Manager
     -> HostAddress
     -> ChainwebVersion
     -> ChainId
-    -> [TransactionHash]
+    -> TransactionHashes
     -> IO (Either ClientError [Bool])
 mempoolMember m a v c txh = mempoolPost m a v c "/member" txh
 
@@ -322,8 +338,8 @@ spv
     -> ChainId
     -> RequestKey
     -> IO (Either ClientError T.Text)
-spv m a v c rk = pactPost m a v c "/spv" $ object
+spv m a v c rk = pactPost m a v c "/spv" $ J.object
   [
-    "requestKey" .= rk
-  , "targetChainId" .= c
+    "requestKey" J..= rk
+  , "targetChainId" J..= c
   ]

@@ -37,15 +37,15 @@ common commons
     , containers
     , Decimal               >=0.5
     , exceptions            >=0.10
-    , fake                  >=0.1
     , hostaddress
-    , http-client           >=0.6
-    , http-client-tls       >=0.3
-    , http-types            >=0.12
+    , http-client
+    , http-client-tls
+    , http-types
     , lens                  >=4.17
     , mtl                   >=2.2
     , optparse-applicative
     , pact                  >=3.5
+    , pact-json
     , random                >=1.1
     , text
     , time                  >=1.8
@@ -54,7 +54,7 @@ common commons
 
 library
   import:          commons
-  hs-source-dirs:  lib
+  hs-source-dirs:  lib pact
   exposed-modules:
     TXG.Repl
     TXG.Simulate.Contracts.CoinContract
@@ -77,7 +77,7 @@ library
 executable txg
   import:         commons
   main-is:        TXG.hs
-  hs-source-dirs: exec
+  hs-source-dirs: exec pact
   ghc-options:    -threaded -rtsopts -with-rtsopts=-N
   other-modules:  TXG.Types
   build-depends:
@@ -99,7 +99,7 @@ executable txg
 executable mempool-p2p-tester
   import: commons
   main-is: MPT.hs
-  hs-source-dirs: exec
+  hs-source-dirs: exec pact
   ghc-options: -threaded -rtsopts -with-rtsopts=-N
   other-modules:
     TXG.Types
