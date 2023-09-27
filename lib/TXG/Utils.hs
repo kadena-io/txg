@@ -41,6 +41,7 @@ module TXG.Utils
 
 -- * TransactionHash
 , TransactionHash(..)
+, TransactionHashes(..)
 
 -- * Pact API
 , ClientError(..)
@@ -83,12 +84,12 @@ import Network.HTTP.Types.Status
 
 import qualified Options.Applicative as O
 
+import qualified Pact.JSON.Encode as J
 import Pact.Parse
 import Pact.Types.API
 import qualified Pact.Types.ChainMeta as CM
 import Pact.Types.Command
 import Pact.Types.Hash
-import qualified Pact.JSON.Encode as J
 
 import Text.Read (readEither)
 
@@ -102,6 +103,9 @@ data ChainwebVersion
     | Testnet04
     | Development
     deriving (Show, Eq, Ord, Bounded, Enum, Generic)
+
+instance J.Encode ChainwebVersion where
+  build = J.build . toJSON
 
 instance ToJSON ChainwebVersion where
     toJSON = toJSON . chainwebVersionToText
@@ -132,7 +136,7 @@ newtype ChainId = ChainId Int
     deriving newtype (ToJSON, FromJSON, Read, Show)
 
 instance J.Encode ChainId where
-    build (ChainId i) = J.build $ J.Base10 i
+    build = J.build . toJSON
 
 cidToText :: ChainId -> T.Text
 cidToText (ChainId i) = T.pack $ show i
@@ -167,10 +171,8 @@ instance FromJSON TransactionHash where
     . T.encodeUtf8
 
 instance J.Encode TransactionHash where
-    build (TransactionHash x) = J.build $ encodeB64UrlNoPaddingText x
+    build = J.build . toJSON
 
-encodeB64UrlNoPaddingText :: B.ByteString -> T.Text
-encodeB64UrlNoPaddingText = T.dropWhileEnd (== '=') . B64U.encodeBase64Unpadded
 -- -------------------------------------------------------------------------- --
 -- Time
 

@@ -30,13 +30,16 @@ import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
 import           Control.Exception (throwIO)
 import           Control.Lens hiding (op, (.=), (|>))
+import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Control.Retry
+import           Data.Aeson.Key (fromText)
 import           Data.Aeson.Lens
 import           Data.Generics.Product.Fields (field)
 import qualified Data.ByteString.Lazy as LB
+import qualified Data.ByteString.Short as SB
 import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
@@ -54,7 +57,6 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import           Data.Time.Clock.POSIX
-import           Fake (fake, generate)
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (host)
 import           Network.HTTP.Types
@@ -79,6 +81,7 @@ import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
 import           Text.Pretty.Simple (pPrintNoColor)
 import           Text.Printf
+import           TXG.Fake (fake, generate)
 import           TXG.Simulate.Contracts.CoinContract
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Simulate.Contracts.HelloWorld
@@ -354,7 +357,7 @@ pactSPV c targetChain = spv
 isMempoolMember
   :: TXGConfig
   -> Sim.ChainId
-  -> [TransactionHash]
+  -> TransactionHashes
   -> IO (Either ClientError [Bool])
 isMempoolMember c cid = mempoolMember
   (confManager c)
@@ -476,7 +479,7 @@ loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO In
 loopUntilConfirmationDepth confDepth cid startHeight tcut = do
   atomically $ do
     cut <- readTVar tcut
-    let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
+    let height = fromIntegral $ fromJuste $ cut ^? key (fromText "hashes") . key (fromText $ cidToText cid) . key (fromText "height") . _Integer
     check (height >= (startHeight + confDepth))
   getCurrentTimeInt64
 
@@ -809,7 +812,7 @@ inMempool args (ChainwebHost h _p2p service) (cid, txhashes)
       putStrLn "Invalid target ChainId" >> exitWith (ExitFailure 1)
     | otherwise = do
         cfg <- mkTXGConfig Nothing args (HostAddress h service)
-        isMempoolMember cfg cid txhashes >>= \case
+        isMempoolMember cfg cid (TransactionHashes txhashes) >>= \case
           Left e -> print e >> exitWith (ExitFailure 1)
           Right res -> pPrintNoColor res
 
@@ -892,12 +895,14 @@ work cfg = do
         PollRequestKeys rk -> liftIO $ pollRequestKeys cfg chainwebHost
           . RequestKey
           . H.Hash
+          . SB.toShort
           . T.encodeUtf8
           $ rk
         ListenerRequestKey rk -> liftIO $ listenerRequestKey cfg chainwebHost
           . ListenerRequest
           . RequestKey
           . H.Hash
+          . SB.toShort
           . T.encodeUtf8
           $ rk
         SingleTransaction stx -> liftIO $
@@ -932,7 +937,7 @@ createLoader v (Sim.ContractName contractName) meta kp = do
   theCode <- readFile (contractName <> ".pact")
   adminKS <- testSomeKeyPairs
   -- TODO: theData may change later
-  let theData = object [ "admin-keyset" .= fmap (formatB16PubKey . fst) adminKS, T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp ]
+  let theData = object [ (fromText "admin-keyset") .= fmap (formatB16PubKey . fst) adminKS, (fromText $ T.append (T.pack contractName) "-keyset") .= fmap (formatB16PubKey . fst) kp ]
 
   mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
