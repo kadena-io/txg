@@ -36,6 +36,7 @@ import qualified Database.SQLite.Simple as SQL
 import           GHC.Generics
 import           Network.HostAddress
 import qualified Options.Applicative as O
+import qualified Pact.JSON.Encode as J
 import           Pact.Parse
 import           Pact.Types.API
 import           Pact.Types.ChainMeta
@@ -46,6 +47,8 @@ import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Types hiding (PollMap)
 import           TXG.Utils
+
+import           GHC.Stack
 
 -------
 -- Args
@@ -69,6 +72,13 @@ data MPTArgs = MPTArgs
   , mpt_pollDelay         :: !Int -- in seconds
   } deriving (Show, Generic)
 
+toJsonViaEncode :: HasCallStack => J.Encode a => a -> Value
+toJsonViaEncode a = case eitherDecode (J.encode a) of
+  Left e -> error $ "Pact.JSON.Encode.toJsonViaEncode: value does not roundtrip. This is a bug in pact-json" <> e
+  Right r -> r
+
+instance J.Encode MPTArgs where
+  build = J.build . toJSON
 
 instance ToJSON MPTArgs where
   toJSON o = object
@@ -78,9 +88,9 @@ instance ToJSON MPTArgs where
     , "batchSize"         .= mpt_batchSize o
     , "confirmationDepth" .= mpt_confirmationDepth o
     , "verbose"           .= mpt_verbose o
-    , "gasLimit"          .= mpt_gasLimit o
-    , "gasPrice"          .= mpt_gasPrice o
-    , "timetolive"        .= mpt_timetolive o
+    , "gasLimit"          .= toJsonViaEncode @GasLimit (mpt_gasLimit o)
+    , "gasPrice"          .= toJsonViaEncode @GasPrice (mpt_gasPrice o)
+    , "timetolive"        .= toJsonViaEncode @TTLSeconds (mpt_timetolive o)
     , "hosts"             .= mpt_hosts o
     , "nodeVersion"       .= mpt_nodeVersion o
     , "nodeChainIds"      .= mpt_nodeChainIds o
