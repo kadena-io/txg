@@ -63,6 +63,7 @@ library
     TXG.Simulate.Contracts.SimplePayments
     TXG.Simulate.Utils
     TXG.Utils
+    TXG.Fake
 
   other-modules:   TXG.ReplInternals
   build-depends:

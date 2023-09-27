@@ -42,6 +42,8 @@ module TXG.Simulate.Contracts.Common
 import           Control.Lens hiding (elements, uncons, (.=))
 import           Control.Monad.Catch
 import           Data.Aeson
+import           Data.Aeson.Key (fromText)
+import qualified Data.Aeson.KeyMap as KM
 import           Data.Attoparsec.ByteString.Char8
 import           Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as B8
@@ -49,7 +51,6 @@ import           Data.Char
 import           Data.Decimal
 import           Data.FileEmbed
 import           Data.Function (fix)
-import qualified Data.HashMap.Strict as HM
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as NEL
 import           Data.Maybe
@@ -58,7 +59,6 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import           Data.Text.Encoding
 import qualified Data.Yaml as Y
-import           Fake
 import           GHC.Generics
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
 import qualified Pact.Types.ChainId as CM
@@ -67,6 +67,7 @@ import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           Pact.Types.Crypto
 import           Pact.Types.Gas
 import           Text.Printf
+import           TXG.Fake
 import           TXG.Simulate.Utils
 import           TXG.Utils
 
@@ -81,7 +82,7 @@ createPaymentsAccount v meta name = do
     adminKS <- testSomeKeyPairs
     nameKeyset <- (\k -> [(k, [])]) <$> genKeyPair defaultScheme
     let theData = object
-          [ T.pack (name ++ "-keyset") .= fmap (formatB16PubKey . fst) nameKeyset
+          [ fromText (T.pack (name ++ "-keyset")) .= fmap (formatB16PubKey . fst) nameKeyset
           ]
     res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (NEL.fromList nameKeyset, res)
@@ -96,7 +97,7 @@ createCoinAccount
 createCoinAccount v meta name = do
     adminKS <- testSomeKeyPairs
     nameKeyset <- NEL.fromList <$> getKeyset
-    let theData = object [T.pack (name ++ "-keyset") .= fmap (formatB16PubKey . fst) nameKeyset]
+    let theData = object [fromText (T.pack (name ++ "-keyset")) .= fmap (formatB16PubKey . fst) nameKeyset]
     res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (nameKeyset, res)
   where
@@ -126,9 +127,9 @@ stockKeyFile = $(embedFile "pact/genesis/devnet/keys.yaml")
 stockKey :: Text -> IO ApiKeyPair
 stockKey s = do
   let Right (Object o) = Y.decodeEither' stockKeyFile
-      Just (Object kp) = HM.lookup s o
-      Just (String pub) = HM.lookup "public" kp
-      Just (String priv) = HM.lookup "secret" kp
+      Just (Object kp) = KM.lookup (fromText s) o
+      Just (String pub) = KM.lookup "public" kp
+      Just (String priv) = KM.lookup "secret" kp
       mkKeyBS = decodeKey . encodeUtf8
   return $ ApiKeyPair (PrivBS $ mkKeyBS priv) (Just $ PubBS $ mkKeyBS pub) Nothing (Just ED25519) Nothing
 
