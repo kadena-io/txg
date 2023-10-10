@@ -102,6 +102,7 @@ data ChainwebVersion
     = Mainnet01
     | Testnet04
     | Development
+    | FastDevelopment
     deriving (Show, Eq, Ord, Bounded, Enum, Generic)
 
 instance J.Encode ChainwebVersion where
@@ -118,11 +119,13 @@ instance FromJSON ChainwebVersion where
     {-# INLINE parseJSON #-}
 
 chainwebVersionToText :: ChainwebVersion -> T.Text
+chainwebVersionToText FastDevelopment = "fast-development"
 chainwebVersionToText Development = "development"
 chainwebVersionToText Testnet04 = "testnet04"
 chainwebVersionToText Mainnet01 = "mainnet01"
 
 chainwebVersionFromText :: MonadThrow m => T.Text -> m ChainwebVersion
+chainwebVersionFromText "fast-development" = pure FastDevelopment
 chainwebVersionFromText "development" = pure Development
 chainwebVersionFromText "testnet04" = pure Testnet04
 chainwebVersionFromText "mainnet01" = pure Mainnet01
@@ -149,6 +152,7 @@ cidFromText t = case readEither (T.unpack t) of
 chainIds :: ChainwebVersion -> [ChainId]
 chainIds Mainnet01 = ChainId <$> [0..9]
 chainIds Development = ChainId <$> [0..9]
+chainIds FastDevelopment = ChainId <$> [0..9]
 chainIds Testnet04 = ChainId <$> [0..9]
 
 -- -------------------------------------------------------------------------- --
