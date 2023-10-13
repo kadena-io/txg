@@ -444,7 +444,7 @@ loop confDepth tcut f = forever $ do
         case confTrackMempoolStat config of
           Nothing -> pure ()
           Just p -> do
-            let retrier = retrying policy (const (pure . isRight)) . const
+            let retrier = retrying policy (const (pure . isLeft)) . const
                 policy :: Monad m => RetryPolicyM m
                 policy =
                   exponentialBackoff (pollExponentialBackoffInitTime p)
