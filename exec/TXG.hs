@@ -759,7 +759,10 @@ pollRequestKeys config (ChainwebHost h _p2p service) rkey = do
   case response of
     Left _ -> putStrLn "Failure" >> exitWith (ExitFailure 1)
     Right (PollResponses a)
-      | null a -> putStrLn "Failure no result returned" >> exitWith (ExitFailure 1)
+      | null a -> do
+        putStrLn "Failure no result returned with error:"
+        print a
+        exitWith (ExitFailure 1)
       | otherwise -> print a >> exitSuccess
  where
     -- | It is assumed that the user has passed in a single, specific Chain that
@@ -868,7 +871,7 @@ work cfg = do
     runLoggerT (act startCutLoop tcut tv chainwebHost) l
   where
     logconfig = Y.defaultLogConfig
-        & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
+        & Y.logConfigLogger . Y.loggerConfigThreshold .~ logLevel cfg
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
 

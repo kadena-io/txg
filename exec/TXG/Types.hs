@@ -83,6 +83,7 @@ import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
+import           System.Logger
 import           Text.Read (readEither)
 import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
@@ -206,6 +207,7 @@ data Args = Args
   , timetolive      :: TTLSeconds
   , trackMempoolStatConfig :: !(Maybe PollParams)
   , confirmationDepth :: !Int
+  , logLevel :: !LogLevel
   } deriving (Show, Generic)
 
 instance J.Encode Args where
@@ -225,6 +227,7 @@ instance ToJSON Args where
     , "timetolive"      .= toJsonViaEncode @TTLSeconds (timetolive o)
     , "trackMempoolStatConfig" .= trackMempoolStatConfig o
     , "confirmationDepth" .= confirmationDepth o
+    , "logLevel" .= logLevel o
     ]
 
 toJsonViaEncode :: HasCallStack => J.Encode a => a -> Value
@@ -246,6 +249,7 @@ instance FromJSON (Args -> Args) where
     <*< field @"timetolive"      ..: "timetolive"      % o
     <*< field @"trackMempoolStatConfig" ..: "trackMempoolStatConfig" % o
     <*< field @"confirmationDepth" ..: "confirmationDepth" % o
+    <*< field @"logLevel" ..: "logLevel" % o
 
 defaultArgs :: Args
 defaultArgs = Args
@@ -261,6 +265,7 @@ defaultArgs = Args
   , timetolive = Sim.defTTL
   , trackMempoolStatConfig = Just defaultPollParams
   , confirmationDepth = 6
+  , logLevel = Info
   }
   where
     v :: ChainwebVersion
@@ -318,6 +323,7 @@ scriptConfigParser = id
       % long "confirmation-depth"
       <> metavar "INT"
       <> help "Confirmation depth"
+  <*< field @"logLevel" .:: pLogLevel
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
