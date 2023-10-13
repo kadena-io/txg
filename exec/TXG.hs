@@ -445,13 +445,13 @@ loop confDepth tcut f = forever $ do
           Nothing -> pure ()
           Just p -> do
             let retrier = retrying policy (const (pure . isRight)) . const
-                policy :: RetryPolicyM IO
+                policy :: Monad m => RetryPolicyM m
                 policy =
                   exponentialBackoff (pollExponentialBackoffInitTime p)
                   <> limitRetries (pollRetries p)
                 toChunker = toList . _rkRequestKeys
             forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
-              poll_result <- liftIO $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
+              poll_result <- lift $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
               case poll_result of
                 Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
                 Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
@@ -525,13 +525,19 @@ trackTime act = do
   t2 <- getCurrentTimeInt64
   return (r,t1,t2)
 
-pollRequestKeys' :: TXGConfig -> ChainId -> RequestKeys -> IO (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
+pollRequestKeys' :: (MonadIO m, MonadLog T.Text m) => TXGConfig -> ChainId -> RequestKeys -> m (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
 pollRequestKeys' cfg cid rkeys = do
-    (response, start, end) <- trackTime $ pactPoll cfg cid rkeys
+    (response, start, end) <- liftIO $ trackTime $ pactPoll cfg cid rkeys
     case response of
       Left _ -> pure $ Left "Failure"
       Right (PollResponses as)
-        | null as -> pure $ Left "Failure no result returned"
+        | null as -> do
+          let zipper cs bs g = zipWithM_ g cs bs
+              rkList = NEL.toList $ _rkRequestKeys rkeys
+              pollList = HM.elems as
+          zipper rkList pollList $ \rk a ->
+              logg Error $ T.pack $ printf "Failure no result returned for request key (%s); error: %s" (show rk) (show a)
+          pure $ Left "Failure no result returned"
         | otherwise -> pure $ Right $ (start, end, fmap f as)
   where
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
@@ -613,14 +619,14 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
       ExceptT $ pactPoll cfg cid rkeys
     case pollResponseCoin of
       Left e  -> do
-        logg Error $ "Couldn't create coin accounts"
+        logg Error $ "Couldn't create coin-contract accounts"
         logg Error $ T.pack (show e)
-      Right _ -> pure ()
+      Right _ -> logg Info "Created coin-contract accounts"
     case pollResponsePayment of
       Left e  -> do
-        logg Warn $ "Couldn't create payment accounts (contract likely is not loaded)"
+        logg Warn $ "Couldn't create payment-contract accounts (contract likely is not loaded)"
         logg Warn $ T.pack (show e)
-      Right _ -> pure ()
+      Right _ -> logg Info "Created payment-contract accounts"
     let accounts = buildGenAccountsKeysets Sim.accountNames paymentKS coinKS
     pure (cid, accounts)
 
