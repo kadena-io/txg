@@ -532,12 +532,12 @@ pollRequestKeys' cfg cid rkeys = do
       Left _ -> pure $ Left "Failure"
       Right (PollResponses as)
         | null as -> do
-          let zipper cs bs g = zipWithM_ g cs bs
+          let zipper cs bs g = zipWith g cs bs
               rkList = NEL.toList $ _rkRequestKeys rkeys
               pollList = HM.elems as
-          zipper rkList pollList $ \rk a ->
-              logg Error $ T.pack $ printf "Failure no result returned for request key (%s); error: %s" (show rk) (show a)
-          pure $ Left "Failure no result returned"
+              msg = unlines $ zipper rkList pollList $ \rk a ->
+                  printf "Failure no result returned for request key (%s); error: %s" (show rk) (show a)
+          pure $ Left $ "Failure no result returned: error: " <> msg
         | otherwise -> pure $ Right $ (start, end, fmap f as)
   where
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
