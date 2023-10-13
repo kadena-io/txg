@@ -605,11 +605,21 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
     !meta <- liftIO $ Sim.makeMeta cid ttl' tgasPrice tgasLimit
     (paymentKS, paymentAcc) <- liftIO $ NEL.unzip <$> Sim.createPaymentsAccounts v meta
     (coinKS, coinAcc) <- liftIO $ NEL.unzip <$> Sim.createCoinAccounts v meta
-    pollresponse <- liftIO . runExceptT $ do
-      rkeys <- ExceptT $ pactSend cfg cid (paymentAcc <> coinAcc)
+    pollResponseCoin <- liftIO . runExceptT $ do
+      rkeys <- ExceptT $ pactSend cfg cid coinAcc
       ExceptT $ pactPoll cfg cid rkeys
-    case pollresponse of
-      Left e  -> logg Error $ T.pack (show e)
+    pollResponsePayment <- liftIO . runExceptT $ do
+      rkeys <- ExceptT $ pactSend cfg cid paymentAcc
+      ExceptT $ pactPoll cfg cid rkeys
+    case pollResponseCoin of
+      Left e  -> do
+        logg Error $ "Couldn't create coin accounts"
+        logg Error $ T.pack (show e)
+      Right _ -> pure ()
+    case pollResponsePayment of
+      Left e  -> do
+        logg Warn $ "Couldn't create payment accounts (contract likely is not loaded)"
+        logg Warn $ T.pack (show e)
       Right _ -> pure ()
     let accounts = buildGenAccountsKeysets Sim.accountNames paymentKS coinKS
     pure (cid, accounts)
