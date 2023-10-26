@@ -421,7 +421,7 @@ _xChainLoop f = forever $ do
 
 
 loop
-  :: (MonadIO m, MonadLog T.Text m)
+  :: (MonadIO m, MonadReader (Logger Text) m, MonadLog T.Text m)
   => Int
   -> TVar Cut
   -> TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
@@ -459,11 +459,22 @@ loop confDepth tcut f = forever $ do
                   logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
                   let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
                   cstart <- liftIO getCurrentTimeInt64
-                  cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
-                  logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+                  logger' <- lift ask
+                  liftIO $ (flip withAsync) wait $ do
+                    cend <- loopUntilConfirmationDepth confDepth cid h tcut
+                    logStatIO logger' cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
             forM_ (Compose msgs) $ \m ->
               lift . logg Info $ "Actual transaction: " <> m
+
+logStatIO :: Logger Text -> ChainId -> RequestKey -> MempoolStat' -> IO ()
+logStatIO logger cid rk ms =
+  loggerFunIO logger Info $ T.pack $ show $ MempoolStat
+    {
+      ms_chainid = cid
+    , ms_txhash = rk
+    , ms_stat = ms
+    }
 
 logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> MempoolStat' -> t m ()
 logStat cid rk ms = lift $ logg Info $ T.pack $ show $ MempoolStat
