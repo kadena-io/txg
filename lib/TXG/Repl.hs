@@ -75,6 +75,7 @@ import           Data.Time.Clock.POSIX
 import           Network.HostAddress
 import           Pact.ApiReq
 import           Pact.GasModel.Utils
+import qualified Pact.JSON.Encode as J
 import           Pact.Parse
 import           Pact.Types.API
 import qualified Pact.Types.ChainId as P
@@ -178,7 +179,7 @@ transferCreate from to g amt = do
 mkKeyset :: Text -> [PublicKeyBS] -> Value
 mkKeyset p ks = object
   [ "pred" .= p
-  , "keys" .= ks
+  , "keys" .= map (\(PubBS pb) -> String $ toB16Text pb) ks
   ]
 
 sampleKeyPairCaps :: IO [SomeKeyPairCaps]
@@ -305,10 +306,10 @@ testAdminKey =
   where
     kSet = object
       [ "pred" .= p
-      , "keys" .= ks
+      , "keys" .= (String $ toB16Text "sender00")
       ]
     p = ">" :: Text
-    ks = [PubBS "sender00"] :: [PublicKeyBS]
+    -- ks = [PubBS "sender00"] :: [PublicKeyBS]
 
 -- **************************************************
 -- The following are all temporarily very useful to avoid entering many repetitive REPL commands.

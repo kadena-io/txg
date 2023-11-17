@@ -41,6 +41,7 @@ module TXG.Utils
 
 -- * TransactionHash
 , TransactionHash(..)
+, TransactionHashes(..)
 
 -- * Pact API
 , ClientError(..)
@@ -63,7 +64,7 @@ import Control.Monad.Catch
 
 import Data.Bifunctor
 import qualified Data.ByteString as B
-import Data.ByteString.Base64.URL
+import qualified Data.ByteString.Base64.URL as B64U
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.List.NonEmpty as NEL
 import Data.Maybe
@@ -83,6 +84,7 @@ import Network.HTTP.Types.Status
 
 import qualified Options.Applicative as O
 
+import qualified Pact.JSON.Encode as J
 import Pact.Parse
 import Pact.Types.API
 import qualified Pact.Types.ChainMeta as CM
@@ -100,7 +102,11 @@ data ChainwebVersion
     = Mainnet01
     | Testnet04
     | Development
+    | FastDevelopment
     deriving (Show, Eq, Ord, Bounded, Enum, Generic)
+
+instance J.Encode ChainwebVersion where
+  build = J.build . toJSON
 
 instance ToJSON ChainwebVersion where
     toJSON = toJSON . chainwebVersionToText
@@ -113,11 +119,13 @@ instance FromJSON ChainwebVersion where
     {-# INLINE parseJSON #-}
 
 chainwebVersionToText :: ChainwebVersion -> T.Text
+chainwebVersionToText FastDevelopment = "fast-development"
 chainwebVersionToText Development = "development"
 chainwebVersionToText Testnet04 = "testnet04"
 chainwebVersionToText Mainnet01 = "mainnet01"
 
 chainwebVersionFromText :: MonadThrow m => T.Text -> m ChainwebVersion
+chainwebVersionFromText "fast-development" = pure FastDevelopment
 chainwebVersionFromText "development" = pure Development
 chainwebVersionFromText "testnet04" = pure Testnet04
 chainwebVersionFromText "mainnet01" = pure Mainnet01
@@ -130,6 +138,9 @@ newtype ChainId = ChainId Int
     deriving (Eq, Ord, Num, Generic)
     deriving newtype (ToJSON, FromJSON, Read, Show)
 
+instance J.Encode ChainId where
+    build = J.build . toJSON
+
 cidToText :: ChainId -> T.Text
 cidToText (ChainId i) = T.pack $ show i
 
@@ -141,6 +152,7 @@ cidFromText t = case readEither (T.unpack t) of
 chainIds :: ChainwebVersion -> [ChainId]
 chainIds Mainnet01 = ChainId <$> [0..9]
 chainIds Development = ChainId <$> [0..9]
+chainIds FastDevelopment = ChainId <$> [0..9]
 chainIds Testnet04 = ChainId <$> [0..9]
 
 -- -------------------------------------------------------------------------- --
@@ -153,20 +165,24 @@ instance Show TransactionHash where
     show = T.unpack . T.decodeUtf8 . BL.toStrict . encode
 
 instance ToJSON TransactionHash where
-  toJSON (TransactionHash x) = toJSON $! encodeBase64Unpadded x
+  toJSON (TransactionHash x) = toJSON $! B64U.encodeBase64Unpadded x
 
 instance FromJSON TransactionHash where
   parseJSON = withText "TransactionHash"
     $! either (fail . T.unpack) return
     . fmap TransactionHash
-    . decodeBase64Unpadded
+    . B64U.decodeBase64Unpadded
     . T.encodeUtf8
+
+instance J.Encode TransactionHash where
+    build = J.build . toJSON
 
 -- -------------------------------------------------------------------------- --
 -- Time
 
 currentTxTime :: IO CM.TxCreationTime
 currentTxTime = CM.TxCreationTime . ParsedInteger . round <$> getPOSIXTime
+
 
 -- -------------------------------------------------------------------------- --
 -- Misc Utils
@@ -199,7 +215,7 @@ newtype ClientError = ClientError T.Text
 instance Exception ClientError
 
 post
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Manager
     -> HostAddress
@@ -228,12 +244,12 @@ post mgr hostAddr urlPath s body = do
         , port = fromIntegral $ _hostAddressPort hostAddr
         , path = T.encodeUtf8 urlPath
         , requestHeaders = [("content-type", "application/json")]
-        , requestBody = RequestBodyLBS $ encode body
+        , requestBody = RequestBodyLBS $ J.encode body
         , responseTimeout = responseTimeoutMicro $ 1000000 * 60 * 4
         }
 
 pactPost
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Manager
     -> HostAddress
@@ -246,7 +262,7 @@ pactPost mgr hostAddr v cid pactPath
     = post mgr hostAddr (pactBasePath v cid <> pactPath) False
 
 mempoolPost
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Manager
     -> HostAddress
@@ -306,12 +322,18 @@ listen
     -> IO (Either ClientError ListenResponse)
 listen m a v c rk = pactPost m a v c "/listen" (ListenerRequest rk)
 
+newtype TransactionHashes = TransactionHashes [TransactionHash]
+    deriving (Show, Eq, Ord, Generic)
+
+instance J.Encode TransactionHashes where
+    build (TransactionHashes xs) = J.build $ J.Array xs
+
 mempoolMember
     :: Manager
     -> HostAddress
     -> ChainwebVersion
     -> ChainId
-    -> [TransactionHash]
+    -> TransactionHashes
     -> IO (Either ClientError [Bool])
 mempoolMember m a v c txh = mempoolPost m a v c "/member" txh
 
@@ -322,8 +344,8 @@ spv
     -> ChainId
     -> RequestKey
     -> IO (Either ClientError T.Text)
-spv m a v c rk = pactPost m a v c "/spv" $ object
+spv m a v c rk = pactPost m a v c "/spv" $ J.object
   [
-    "requestKey" .= rk
-  , "targetChainId" .= c
+    "requestKey" J..= rk
+  , "targetChainId" J..= c
   ]

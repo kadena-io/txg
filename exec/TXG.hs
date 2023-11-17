@@ -30,13 +30,16 @@ import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
 import           Control.Exception (throwIO)
 import           Control.Lens hiding (op, (.=), (|>))
+import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Control.Retry
+import           Data.Aeson.Key (fromText)
 import           Data.Aeson.Lens
 import           Data.Generics.Product.Fields (field)
 import qualified Data.ByteString.Lazy as LB
+import qualified Data.ByteString.Short as SB
 import           Data.Either
 import           Data.Foldable
 import           Data.Functor.Compose
@@ -54,7 +57,6 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import           Data.Time.Clock.POSIX
-import           Fake (fake, generate)
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (host)
 import           Network.HTTP.Types
@@ -79,6 +81,7 @@ import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
 import           Text.Pretty.Simple (pPrintNoColor)
 import           Text.Printf
+import           TXG.Fake (fake, generate)
 import           TXG.Simulate.Contracts.CoinContract
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Simulate.Contracts.HelloWorld
@@ -354,7 +357,7 @@ pactSPV c targetChain = spv
 isMempoolMember
   :: TXGConfig
   -> Sim.ChainId
-  -> [TransactionHash]
+  -> TransactionHashes
   -> IO (Either ClientError [Bool])
 isMempoolMember c cid = mempoolMember
   (confManager c)
@@ -418,7 +421,7 @@ _xChainLoop f = forever $ do
 
 
 loop
-  :: (MonadIO m, MonadLog T.Text m)
+  :: (MonadIO m, MonadReader (Logger Text) m, MonadLog T.Text m)
   => Int
   -> TVar Cut
   -> TXG TXGState m (Sim.ChainId, NEL.NonEmpty (Maybe Text), NEL.NonEmpty (Command Text))
@@ -441,14 +444,14 @@ loop confDepth tcut f = forever $ do
         case confTrackMempoolStat config of
           Nothing -> pure ()
           Just p -> do
-            let retrier = retrying policy (const (pure . isRight)) . const
-                policy :: RetryPolicyM IO
+            let retrier = retrying policy (const (pure . isLeft)) . const
+                policy :: Monad m => RetryPolicyM m
                 policy =
                   exponentialBackoff (pollExponentialBackoffInitTime p)
                   <> limitRetries (pollRetries p)
                 toChunker = toList . _rkRequestKeys
             forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
-              poll_result <- liftIO $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
+              poll_result <- lift $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
               case poll_result of
                 Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
                 Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
@@ -456,11 +459,22 @@ loop confDepth tcut f = forever $ do
                   logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
                   let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
                   cstart <- liftIO getCurrentTimeInt64
-                  cend <- liftIO $ withAsync (loopUntilConfirmationDepth confDepth cid h tcut) wait
-                  logStat cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+                  logger' <- lift ask
+                  liftIO $ (flip withAsync) wait $ do
+                    cend <- loopUntilConfirmationDepth confDepth cid h tcut
+                    logStatIO logger' cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
             forM_ (Compose msgs) $ \m ->
               lift . logg Info $ "Actual transaction: " <> m
+
+logStatIO :: Logger Text -> ChainId -> RequestKey -> MempoolStat' -> IO ()
+logStatIO logger cid rk ms =
+  loggerFunIO logger Info $ T.pack $ show $ MempoolStat
+    {
+      ms_chainid = cid
+    , ms_txhash = rk
+    , ms_stat = ms
+    }
 
 logStat :: (MonadTrans t, MonadLog Text m) => ChainId -> RequestKey -> MempoolStat' -> t m ()
 logStat cid rk ms = lift $ logg Info $ T.pack $ show $ MempoolStat
@@ -476,7 +490,7 @@ loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO In
 loopUntilConfirmationDepth confDepth cid startHeight tcut = do
   atomically $ do
     cut <- readTVar tcut
-    let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
+    let height = fromIntegral $ fromJuste $ cut ^? key (fromText "hashes") . key (fromText $ cidToText cid) . key (fromText "height") . _Integer
     check (height >= (startHeight + confDepth))
   getCurrentTimeInt64
 
@@ -522,13 +536,19 @@ trackTime act = do
   t2 <- getCurrentTimeInt64
   return (r,t1,t2)
 
-pollRequestKeys' :: TXGConfig -> ChainId -> RequestKeys -> IO (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
+pollRequestKeys' :: (MonadIO m, MonadLog T.Text m) => TXGConfig -> ChainId -> RequestKeys -> m (Either String (Int64, Int64, (HM.HashMap RequestKey (Maybe PactError, Value))))
 pollRequestKeys' cfg cid rkeys = do
-    (response, start, end) <- trackTime $ pactPoll cfg cid rkeys
+    (response, start, end) <- liftIO $ trackTime $ pactPoll cfg cid rkeys
     case response of
       Left _ -> pure $ Left "Failure"
       Right (PollResponses as)
-        | null as -> pure $ Left "Failure no result returned"
+        | null as -> do
+          let zipper cs bs g = zipWith g cs bs
+              rkList = NEL.toList $ _rkRequestKeys rkeys
+              pollList = HM.elems as
+              msg = unlines $ zipper rkList pollList $ \rk a ->
+                  printf "Failure no result returned for request key (%s); error: %s" (show rk) (show a)
+          pure $ Left $ "Failure no result returned: error: " <> msg
         | otherwise -> pure $ Right $ (start, end, fmap f as)
   where
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
@@ -602,12 +622,22 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
     !meta <- liftIO $ Sim.makeMeta cid ttl' tgasPrice tgasLimit
     (paymentKS, paymentAcc) <- liftIO $ NEL.unzip <$> Sim.createPaymentsAccounts v meta
     (coinKS, coinAcc) <- liftIO $ NEL.unzip <$> Sim.createCoinAccounts v meta
-    pollresponse <- liftIO . runExceptT $ do
-      rkeys <- ExceptT $ pactSend cfg cid (paymentAcc <> coinAcc)
+    pollResponseCoin <- liftIO . runExceptT $ do
+      rkeys <- ExceptT $ pactSend cfg cid coinAcc
       ExceptT $ pactPoll cfg cid rkeys
-    case pollresponse of
-      Left e  -> logg Error $ T.pack (show e)
-      Right _ -> pure ()
+    pollResponsePayment <- liftIO . runExceptT $ do
+      rkeys <- ExceptT $ pactSend cfg cid paymentAcc
+      ExceptT $ pactPoll cfg cid rkeys
+    case pollResponseCoin of
+      Left e  -> do
+        logg Error $ "Couldn't create coin-contract accounts"
+        logg Error $ T.pack (show e)
+      Right _ -> logg Info "Created coin-contract accounts"
+    case pollResponsePayment of
+      Left e  -> do
+        logg Warn $ "Couldn't create payment-contract accounts (contract likely is not loaded)"
+        logg Warn $ T.pack (show e)
+      Right _ -> logg Info "Created payment-contract accounts"
     let accounts = buildGenAccountsKeysets Sim.accountNames paymentKS coinKS
     pure (cid, accounts)
 
@@ -756,7 +786,10 @@ pollRequestKeys config (ChainwebHost h _p2p service) rkey = do
   case response of
     Left _ -> putStrLn "Failure" >> exitWith (ExitFailure 1)
     Right (PollResponses a)
-      | null a -> putStrLn "Failure no result returned" >> exitWith (ExitFailure 1)
+      | null a -> do
+        putStrLn "Failure no result returned with error:"
+        print a
+        exitWith (ExitFailure 1)
       | otherwise -> print a >> exitSuccess
  where
     -- | It is assumed that the user has passed in a single, specific Chain that
@@ -809,7 +842,7 @@ inMempool args (ChainwebHost h _p2p service) (cid, txhashes)
       putStrLn "Invalid target ChainId" >> exitWith (ExitFailure 1)
     | otherwise = do
         cfg <- mkTXGConfig Nothing args (HostAddress h service)
-        isMempoolMember cfg cid txhashes >>= \case
+        isMempoolMember cfg cid (TransactionHashes txhashes) >>= \case
           Left e -> print e >> exitWith (ExitFailure 1)
           Right res -> pPrintNoColor res
 
@@ -865,7 +898,7 @@ work cfg = do
     runLoggerT (act startCutLoop tcut tv chainwebHost) l
   where
     logconfig = Y.defaultLogConfig
-        & Y.logConfigLogger . Y.loggerConfigThreshold .~ Info
+        & Y.logConfigLogger . Y.loggerConfigThreshold .~ logLevel cfg
     withLog inner = Y.withHandleBackend_ id (logconfig ^. Y.logConfigBackend)
         $ \backend -> Y.withLogger (logconfig ^. Y.logConfigLogger) backend inner
 
@@ -892,12 +925,14 @@ work cfg = do
         PollRequestKeys rk -> liftIO $ pollRequestKeys cfg chainwebHost
           . RequestKey
           . H.Hash
+          . SB.toShort
           . T.encodeUtf8
           $ rk
         ListenerRequestKey rk -> liftIO $ listenerRequestKey cfg chainwebHost
           . ListenerRequest
           . RequestKey
           . H.Hash
+          . SB.toShort
           . T.encodeUtf8
           $ rk
         SingleTransaction stx -> liftIO $
@@ -932,7 +967,7 @@ createLoader v (Sim.ContractName contractName) meta kp = do
   theCode <- readFile (contractName <> ".pact")
   adminKS <- testSomeKeyPairs
   -- TODO: theData may change later
-  let theData = object [ "admin-keyset" .= fmap (formatB16PubKey . fst) adminKS, T.append (T.pack contractName) "-keyset" .= fmap (formatB16PubKey . fst) kp ]
+  let theData = object [ (fromText "admin-keyset") .= fmap (formatB16PubKey . fst) adminKS, (fromText $ T.append (T.pack contractName) "-keyset") .= fmap (formatB16PubKey . fst) kp ]
 
   mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 

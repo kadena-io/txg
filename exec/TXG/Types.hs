@@ -76,16 +76,20 @@ import           GHC.Generics
 import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy)
 import qualified Options.Applicative as O
+import qualified Pact.JSON.Encode as J
 import           Pact.Parse
 import           Pact.Types.API
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command (SomeKeyPairCaps)
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
+import           System.Logger
 import           Text.Read (readEither)
 import           Text.Printf
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Utils
+
+import           GHC.Stack
 
 newtype Verbose = Verbose { verbosity :: Bool }
   deriving (Eq, Show, Generic, Read)
@@ -203,7 +207,11 @@ data Args = Args
   , timetolive      :: TTLSeconds
   , trackMempoolStatConfig :: !(Maybe PollParams)
   , confirmationDepth :: !Int
+  , logLevel :: !LogLevel
   } deriving (Show, Generic)
+
+instance J.Encode Args where
+  build = J.build . toJSON
 
 instance ToJSON Args where
   toJSON o = object
@@ -214,12 +222,18 @@ instance ToJSON Args where
     , "chainwebVersion" .= nodeVersion o
     , "batchSize"       .= batchSize o
     , "verbose"         .= verbose o
-    , "gasLimit"        .= gasLimit o
-    , "gasPrice"        .= gasPrice o
-    , "timetolive"      .= timetolive o
+    , "gasLimit"        .= toJsonViaEncode @GasLimit (gasLimit o)
+    , "gasPrice"        .= toJsonViaEncode @GasPrice (gasPrice o)
+    , "timetolive"      .= toJsonViaEncode @TTLSeconds (timetolive o)
     , "trackMempoolStatConfig" .= trackMempoolStatConfig o
     , "confirmationDepth" .= confirmationDepth o
+    , "logLevel" .= logLevel o
     ]
+
+toJsonViaEncode :: HasCallStack => J.Encode a => a -> Value
+toJsonViaEncode a = case eitherDecode (J.encode a) of
+  Left e -> error $ "Pact.JSON.Encode.toJsonViaEncode: value does not roundtrip. This is a bug in pact-json" <> e
+  Right r -> r
 
 instance FromJSON (Args -> Args) where
   parseJSON = withObject "Args" $ \o -> id
@@ -233,8 +247,9 @@ instance FromJSON (Args -> Args) where
     <*< field @"gasLimit"        ..: "gasLimit"        % o
     <*< field @"gasPrice"        ..: "gasPrice"        % o
     <*< field @"timetolive"      ..: "timetolive"      % o
-    <*< field @"trackMempoolStatConfig" ..: "trackMempoolStatConfig" %o
-    <*< field @"confirmationDepth" ..: "confirmationDepth" %o
+    <*< field @"trackMempoolStatConfig" ..: "trackMempoolStatConfig" % o
+    <*< field @"confirmationDepth" ..: "confirmationDepth" % o
+    <*< field @"logLevel" ..: "logLevel" % o
 
 defaultArgs :: Args
 defaultArgs = Args
@@ -250,6 +265,7 @@ defaultArgs = Args
   , timetolive = Sim.defTTL
   , trackMempoolStatConfig = Just defaultPollParams
   , confirmationDepth = 6
+  , logLevel = Info
   }
   where
     v :: ChainwebVersion
@@ -307,6 +323,7 @@ scriptConfigParser = id
       % long "confirmation-depth"
       <> metavar "INT"
       <> help "Confirmation depth"
+  <*< field @"logLevel" .:: pLogLevel
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -392,7 +409,6 @@ newtype TXCount = TXCount Word
 
 newtype BatchSize = BatchSize Word
   deriving newtype (Integral, Real, Num, Enum, Ord, Eq, Read, Show, ToJSON, FromJSON)
-
 
 data PollParams = PollParams
   {

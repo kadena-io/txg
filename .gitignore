@@ -1,3 +1,6 @@
 .stack-work/
 *~
 *.dump-hi
+dist-newstyle/
+result
+stack.yaml.lock

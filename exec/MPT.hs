@@ -32,10 +32,11 @@ import           Control.Concurrent.Async hiding (poll)
 import           Control.Concurrent.STM
 import           Control.Exception (catches, displayException, throwIO, Handler(..), SomeException(..))
 import           Control.Lens hiding (op, (.=), (|>))
-import           Control.Monad.Except
+import           Control.Monad
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
 import           Control.Retry
+import           Data.Aeson.Key (fromText)
 import qualified Data.Aeson.Types as A
 import           Data.Aeson.Lens
 import qualified Data.ByteString.Lazy as LB
@@ -59,7 +60,6 @@ import qualified Data.Text as T
 import           Data.Time.Clock.POSIX
 import qualified Database.SQLite.Simple as SQL
 import qualified Database.SQLite.Simple.ToField as SQL ()
-import           Fake (fake, generate)
 import           Network.HostAddress
 import           Pact.Types.API
 import           Pact.Types.Capability
@@ -78,6 +78,7 @@ import           System.Random.MWC (createSystemRandom, uniformR)
 import           System.Random.MWC.Distributions (normal)
 import           Text.Pretty.Simple (pPrintNoColor)
 import           Text.Printf
+import           TXG.Fake (fake, generate)
 import           TXG.Simulate.Contracts.CoinContract
 import qualified TXG.Simulate.Contracts.Common as Sim
 import           TXG.Simulate.Contracts.HelloWorld
@@ -307,7 +308,7 @@ loopUntilConfirmationDepth :: Int -> ChainId -> BlockHeight -> TVar Cut -> IO In
 loopUntilConfirmationDepth confirmationDepth' cid startHeight tcut = do
   atomically $ do
     cut <- readTVar tcut
-    let height = fromIntegral $ fromJuste $ cut ^? key "hashes" . key (cidToText cid) . key "height" . _Integer
+    let height = fromIntegral $ fromJuste $ cut ^? key (fromText "hashes") . key (fromText $ cidToText cid) . key (fromText "height") . _Integer
     check (height >= (startHeight + confirmationDepth'))
   getCurrentTimeInt64
 

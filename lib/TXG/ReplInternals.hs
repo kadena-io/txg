@@ -8,6 +8,7 @@
 module TXG.ReplInternals where
 
 import           Control.Lens hiding ((.=))
+import           Control.Monad (replicateM)
 import           Control.Monad.State
 import           Data.Aeson
 import           Data.Decimal
@@ -24,6 +25,7 @@ import           Pact.Types.ChainMeta
 import           Pact.Types.Command
 import           Pact.Types.Hash
 import           Pact.Types.SPV
+import qualified Pact.JSON.Encode as J
 import           System.Random
 import           Text.Printf
 import           TXG.Simulate.Contracts.CoinContract
@@ -46,7 +48,7 @@ data Network = Network
   }
 
 pactPostNetwork
-    :: ToJSON body
+    :: J.Encode body
     => FromJSON result
     => Network
     -> T.Text
@@ -82,10 +84,10 @@ pactSPV
     -> RequestKey
     -> ChainId
     -> IO (Either ClientError ContProof)
-pactSPV n rkey targetChain = pactPostNetwork n "/spv" $ object
+pactSPV n rkey targetChain = pactPostNetwork n "/spv" $ J.object
     [
-     "requestKey" .= rkey
-    , "targetChainId" .= targetChain
+     "requestKey" J..= rkey
+    , "targetChainId" J..= targetChain
     ]
 
 pactLocal

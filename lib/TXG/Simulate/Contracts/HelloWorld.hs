@@ -18,15 +18,14 @@ import           Data.Default
 import qualified Data.List.NonEmpty as NEL
 import           Data.Text (Text)
 import qualified Data.Text as T
-import           Fake
 import           GHC.Generics
-import           Fake.Provider.Person.EN_US
 import           NeatInterpolation
 import           Pact.ApiReq (mkExec)
 import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
 import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
 import           Text.Printf
+import           TXG.Fake
 import           TXG.Simulate.Utils
 import           TXG.Utils
 
