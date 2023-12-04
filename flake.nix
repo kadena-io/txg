@@ -3,9 +3,11 @@
   inputs.haskellNix.url = "github:input-output-hk/haskell.nix";
   inputs.nixpkgs.follows = "haskellNix/nixpkgs-unstable";
   inputs.flake-utils.url = "github:numtide/flake-utils";
-  outputs = { self, nixpkgs, flake-utils, haskellNix }:
+  inputs.hs-nix-infra.url = "github:kadena-io/hs-nix-infra";
+  outputs = { self, flake-utils, hs-nix-infra }:
     flake-utils.lib.eachSystem [ "x86_64-linux" "x86_64-darwin" ] (system:
     let
+      inherit (hs-nix-infra) nixpkgs haskellNix;
       overlays = [ haskellNix.overlay
         (final: prev: {
           # This overlay adds our project to pkgs
@@ -36,9 +38,13 @@
         # This adds support for `nix build .#js-unknown-ghcjs:hello:exe:hello`
         # crossPlatforms = p: [p.ghcjs];
       };
-    in flake // {
-      # Built by `nix build .`
-      packages.default = flake.packages."txg:exe:txg";
+    in
+     {
+       packages = {
+         default = flake.packages."txg:exe:txg";
+         recursive = with hs-nix-infra.lib.recursive system;
+           wrapRecursiveWithMeta "txg" "${wrapFlake self}.default";
+       };
     });
 }
 
