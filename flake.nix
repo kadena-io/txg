@@ -45,6 +45,10 @@
          recursive = with hs-nix-infra.lib.recursive system;
            wrapRecursiveWithMeta "txg" "${wrapFlake self}.default";
        };
+
+       devShell = flake.devShell;
+
+       project = flake.project;
     });
 }
 
