@@ -1,7 +1,7 @@
 {
   description = "TXG: Chainweb transaction generator";
-  inputs.haskellNix.url = "github:input-output-hk/haskell.nix";
-  inputs.nixpkgs.follows = "haskellNix/nixpkgs-unstable";
+  # inputs.haskellNix.url = "github:input-output-hk/haskell.nix";
+  # inputs.nixpkgs.follows = "haskellNix/nixpkgs-unstable";
   inputs.flake-utils.url = "github:numtide/flake-utils";
   inputs.hs-nix-infra.url = "github:kadena-io/hs-nix-infra";
   outputs = { self, flake-utils, hs-nix-infra }:
@@ -14,7 +14,7 @@
           txgProject =
             final.haskell-nix.project' {
               src = ./.;
-              compiler-nix-name = "ghc962";
+              compiler-nix-name = "ghc963";
               projectFileName = "cabal.project";
               # This is used by `nix develop .` to open a shell for use with
               # `cabal`, `hlint` and `haskell-language-server`
