@@ -139,9 +139,9 @@ generateSimpleTransactions = do
           theCode = "(" ++ [op] ++ " " ++ show operandA ++ " " ++ show operandB ++ ")"
 
       -- this contains the key of sender00
-      kps <- testSomeKeyPairs
+      kps <- testDynKeyPairs
 
-      let theData = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
+      let theData = object ["test-admin-keyset" .= fmap (formatPubKeyForCmd . fst) kps]
       meta <- Sim.makeMeta cid ttl gp gl
       (Nothing,)
         <$> mkExec (T.pack theCode) theData meta
@@ -197,7 +197,7 @@ _generateXChainTransactions isVerbose = do
         -> Verbose
         -> Sim.ChainId
         -> Sim.ChainId
-        -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
+        -> Map Sim.Account (NEL.NonEmpty (DynKeyPair,[SigCapability]))
         -> IO (Maybe Text, Command Text)
     xChainTransfer gl gp ttl version (Verbose vb) sourceChain _targetChain coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest True coinaccts >>= generate
@@ -217,7 +217,7 @@ _generateXChainTransactions isVerbose = do
       meta <- Sim.makeMetaWithSender sender ttl gp gl sourceChain
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
-    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
+    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty (DynKeyPair,[SigCapability])) -> (Sim.Account, NEL.NonEmpty (DynKeyPair,[SigCapability]))
     mkTransferCaps (ReceiverName (Sim.Account r)) (Sim.Amount m) (s@(Sim.Account ss),ks) = (s, (caps <$) <$> ks)
       where caps = [gas,tfr]
             gas = SigCapability (QualifiedName "coin" "GAS" (mkInfo "coin.GAS")) []
@@ -265,7 +265,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         -> Bool
         -> Verbose
         -> Sim.ChainId
-        -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
+        -> Map Sim.Account (NEL.NonEmpty (DynKeyPair,[SigCapability]))
         -> IO (Maybe Text, Command Text)
     coinContract gl gp ttl version transfers (Verbose vb) cid coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest transfers coinaccts >>= generate
@@ -285,7 +285,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
       meta <- Sim.makeMetaWithSender sender ttl gp gl cid
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
-    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
+    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty (DynKeyPair,[SigCapability])) -> (Sim.Account, NEL.NonEmpty (DynKeyPair,[SigCapability]))
     mkTransferCaps (ReceiverName (Sim.Account r)) (Sim.Amount m) (s@(Sim.Account ss),ks) = (s, (caps <$) <$> ks)
       where caps = [gas,tfr]
             gas = SigCapability (QualifiedName "coin" "GAS" (mkInfo "coin.GAS")) []
@@ -294,7 +294,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                   , PLiteral $ LString $ T.pack r
                   , PLiteral $ LDecimal m]
 
-    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
+    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty (DynKeyPair,[SigCapability])) -> IO (Command Text)
     payments gl gp ttl v cid paymentAccts = do
       paymentsRequest <- mkRandomSimplePaymentRequest paymentAccts >>= generate
       case paymentsRequest of
@@ -554,7 +554,7 @@ pollRequestKeys' cfg cid rkeys = do
     f cr = (either Just (const Nothing) $ _pactResult $ _crResult cr, fromJuste $ _crMetaData cr)
 
 type ContractLoader
-    = CM.PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
+    = CM.PublicMeta -> NEL.NonEmpty (DynKeyPair,[SigCapability]) -> IO (Command Text)
 
 loadContracts :: Args -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
 loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
@@ -562,7 +562,7 @@ loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
         <- mkTXGConfig Nothing config (HostAddress h service)
   forM_ (nodeChainIds config) $ \cid -> do
     !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
-    ts <- testSomeKeyPairs
+    ts <- testDynKeyPairs
     contracts <- traverse (\f -> f meta ts) contractLoaders
     pollresponse <- runExceptT $ do
       rkeys <- ExceptT $ pactSend conf cid contracts
@@ -653,16 +653,16 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
   where
     buildGenAccountsKeysets
       :: NEL.NonEmpty Sim.Account
-      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
-      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
-      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+      -> NEL.NonEmpty (NEL.NonEmpty (DynKeyPair,[SigCapability]))
+      -> NEL.NonEmpty (NEL.NonEmpty (DynKeyPair,[SigCapability]))
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     buildGenAccountsKeysets accs pks cks =
       M.fromList . NEL.toList $ nelZipWith3 go accs pks cks
 
     go :: Sim.Account
-       -> NEL.NonEmpty SomeKeyPairCaps
-       -> NEL.NonEmpty SomeKeyPairCaps
-       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+       -> NEL.NonEmpty (DynKeyPair,[SigCapability])
+       -> NEL.NonEmpty (DynKeyPair,[SigCapability])
+       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     go name pks cks = (name, M.fromList [ps, cs])
       where
         ps = (Sim.ContractName "payment", pks)
@@ -701,14 +701,14 @@ _realXChainCoinTransactions config (ChainwebHost h _p2p service) tv distribution
   where
     buildGenAccountsKeysets
       :: NEL.NonEmpty Sim.Account
-      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
-      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+      -> NEL.NonEmpty (NEL.NonEmpty (DynKeyPair,[SigCapability]))
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     buildGenAccountsKeysets accs cks =
       M.fromList . NEL.toList $ NEL.zipWith go accs cks
 
     go :: Sim.Account
-       -> NEL.NonEmpty SomeKeyPairCaps
-       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+       -> NEL.NonEmpty (DynKeyPair,[SigCapability])
+       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     go name cks = (name, M.singleton (Sim.ContractName "coin") cks)
 
 realCoinTransactions
@@ -746,14 +746,14 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
   where
     buildGenAccountsKeysets
       :: NEL.NonEmpty Sim.Account
-      -> NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps)
-      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+      -> NEL.NonEmpty (NEL.NonEmpty (DynKeyPair,[SigCapability]))
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     buildGenAccountsKeysets accs cks =
       M.fromList . NEL.toList $ NEL.zipWith go accs cks
 
     go :: Sim.Account
-       -> NEL.NonEmpty SomeKeyPairCaps
-       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+       -> NEL.NonEmpty (DynKeyPair,[SigCapability])
+       -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     go name cks = (name, M.singleton (Sim.ContractName "coin") cks)
 
 versionChains :: ChainwebVersion -> NESeq Sim.ChainId
@@ -816,7 +816,7 @@ singleTransaction args (ChainwebHost h _p2p service) (SingleTX c cid)
     putStrLn "Invalid target ChainId" >> exitWith (ExitFailure 1)
   | otherwise = do
       cfg <- mkTXGConfig Nothing args (HostAddress h service)
-      kps <- testSomeKeyPairs
+      kps <- testDynKeyPairs
       meta <- Sim.makeMeta cid (confTTL cfg) (confGasPrice cfg) (confGasLimit cfg)
       let v = confVersion cfg
       cmd <- mkExec c (datum kps) meta
@@ -827,8 +827,8 @@ singleTransaction args (ChainwebHost h _p2p service) (SingleTX c cid)
         Left e -> print e >> exitWith (ExitFailure 1)
         Right res -> pPrintNoColor res
   where
-    datum :: NEL.NonEmpty SomeKeyPairCaps -> Value
-    datum kps = object ["test-admin-keyset" .= fmap (formatB16PubKey . fst) kps]
+    datum :: NEL.NonEmpty (DynKeyPair,[SigCapability]) -> Value
+    datum kps = object ["test-admin-keyset" .= fmap (formatPubKeyForCmd . fst) kps]
 
     f :: TXGConfig -> Command Text -> ExceptT ClientError IO ListenResponse
     f cfg cmd = do
@@ -965,9 +965,9 @@ mainInfo =
 createLoader :: ChainwebVersion -> Sim.ContractName -> ContractLoader
 createLoader v (Sim.ContractName contractName) meta kp = do
   theCode <- readFile (contractName <> ".pact")
-  adminKS <- testSomeKeyPairs
+  adminKS <- testDynKeyPairs
   -- TODO: theData may change later
-  let theData = object [ (fromText "admin-keyset") .= fmap (formatB16PubKey . fst) adminKS, (fromText $ T.append (T.pack contractName) "-keyset") .= fmap (formatB16PubKey . fst) kp ]
+  let theData = object [ (fromText "admin-keyset") .= fmap (formatPubKeyForCmd . fst) adminKS, (fromText $ T.append (T.pack contractName) "-keyset") .= fmap (formatPubKeyForCmd . fst) kp ]
 
   mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 

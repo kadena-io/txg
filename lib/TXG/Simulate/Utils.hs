@@ -11,12 +11,12 @@ import qualified Data.List.NonEmpty as NEL
 import           Data.Text (Text)
 import           Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
+import           Pact.Types.Capability (SigCapability)
 import           Pact.Types.ChainId (NetworkId(..))
 import           Pact.Types.ChainMeta (PublicMeta(..))
-import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
+import           Pact.Types.Command (Command(..), DynKeyPair(DynEd25519KeyPair, DynWebAuthnKeyPair))
 import           Pact.Types.Crypto
-    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), SomeKeyPair,
-    formatPublicKey)
+    (PPKScheme(..), PrivateKeyBS(..), PublicKeyBS(..), getPublic, exportWebAuthnPublicKey)
 import           Pact.Types.Util (toB16Text)
 import           TXG.Utils
 
@@ -28,14 +28,15 @@ testApiKeyPairs =
       apiKP = ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing
    in pure apiKP
 
-testSomeKeyPairs :: IO (NEL.NonEmpty SomeKeyPairCaps)
-testSomeKeyPairs = do
+testDynKeyPairs :: IO (NEL.NonEmpty (DynKeyPair,[SigCapability]))
+testDynKeyPairs = do
     let (pub, priv, addr, scheme) = someED25519Pair
         apiKP = ApiKeyPair priv (Just pub) (Just addr) (Just scheme) Nothing
     NEL.fromList <$> mkKeyPairs [apiKP]
 
-formatB16PubKey :: SomeKeyPair -> Text
-formatB16PubKey = toB16Text . formatPublicKey
+formatPubKeyForCmd :: DynKeyPair -> Value
+formatPubKeyForCmd (DynEd25519KeyPair kp) = toJSON $ toB16Text $ getPublic kp
+formatPubKeyForCmd (DynWebAuthnKeyPair _ pub _priv) = toJSON $ toB16Text $ exportWebAuthnPublicKey pub
 
 -- | note this is "sender00"'s key
 someED25519Pair :: (PublicKeyBS, PrivateKeyBS, Text, PPKScheme)
@@ -68,13 +69,13 @@ decodeKey = either (error "TXG.Simulate.Utils:decodeKey: decode failed") id . B1
 initAdminKeysetContract
     :: ChainwebVersion
     -> PublicMeta
-    -> NEL.NonEmpty SomeKeyPairCaps
+    -> NEL.NonEmpty (DynKeyPair,[SigCapability])
     -> IO (Command Text)
 initAdminKeysetContract v meta adminKS =
   mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = "(define-keyset 'admin-keyset (read-keyset \"admin-keyset\"))"
-    theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
+    theData = object ["admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS]
 
 measureDiffTime :: MonadIO m => m a -> m (NominalDiffTime, a)
 measureDiffTime someaction = do

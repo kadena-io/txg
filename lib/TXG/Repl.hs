@@ -78,6 +78,7 @@ import           Pact.GasModel.Utils
 import qualified Pact.JSON.Encode as J
 import           Pact.Parse
 import           Pact.Types.API
+import          Pact.Types.Capability (SigCapability)
 import qualified Pact.Types.ChainId as P
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command
@@ -123,27 +124,27 @@ chain0 = ChainId 0
 mkKeyBS :: Text -> ByteString
 mkKeyBS = decodeKey . encodeUtf8
 
-mkKey :: Text -> Text -> SomeKeyPair
-mkKey pub priv = skp
+mkKey :: Text -> Text -> DynKeyPair
+mkKey pub priv = DynEd25519KeyPair skp
   where
-    Right skp = importKeyPair defaultScheme (Just $ PubBS $ mkKeyBS pub) (PrivBS $ mkKeyBS priv)
+    Right skp = importEd25519KeyPair (Just $ PubBS $ mkKeyBS pub) (PrivBS $ mkKeyBS priv)
 
 -- | Pact-web's private key copy/paste feature copies a string that contains the
 -- private and public keys concatenated together. This function makes it easy to
 -- make key pairs from those strings.
-mkKeyCombined :: Text -> SomeKeyPair
+mkKeyCombined :: Text -> DynKeyPair
 mkKeyCombined pactWebPriv = mkKey pub priv
   where
     (priv,pub) = T.splitAt (T.length pactWebPriv `div` 2) pactWebPriv
 
-k2g :: SomeKeyPair -> Guard
+k2g :: DynKeyPair -> Guard
 k2g skp = Guard $ pure (skp, [])
 
 mkGuard pub priv = k2g $ mkKey pub priv
 mkGuardCombined pactWebPriv = k2g $ mkKeyCombined pactWebPriv
 
 signedCode
-  :: [SomeKeyPairCaps]
+  :: [(DynKeyPair,[SigCapability])]
   -- ^ Key pair to sign with
   -> String
   -- ^ Pact code
@@ -182,19 +183,19 @@ mkKeyset p ks = object
   , "keys" .= map (\(PubBS pb) -> String $ toB16Text pb) ks
   ]
 
-sampleKeyPairCaps :: IO [SomeKeyPairCaps]
+sampleKeyPairCaps :: IO [(DynKeyPair,[SigCapability])]
 sampleKeyPairCaps = do
   s <- stockKey "sender00"
   mkKeyPairs [s]
 
-mkCmdStr :: PublicMeta -> ChainwebVersion -> [SomeKeyPairCaps] -> String -> IO (Command Text)
+mkCmdStr :: PublicMeta -> ChainwebVersion -> [(DynKeyPair,[SigCapability])] -> String -> IO (Command Text)
 mkCmdStr meta ver kps str =
   cmd (T.pack str) Null meta kps (Just (verToPactNetId ver)) Nothing
 
 mkCmdDataStr
   :: PublicMeta
   -> ChainwebVersion
-  -> [SomeKeyPairCaps]
+  -> [(DynKeyPair,[SigCapability])]
   -> String
   -> Value
   -> IO (Command Text)

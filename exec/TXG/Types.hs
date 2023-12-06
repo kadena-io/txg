@@ -79,8 +79,9 @@ import qualified Options.Applicative as O
 import qualified Pact.JSON.Encode as J
 import           Pact.Parse
 import           Pact.Types.API
+import           Pact.Types.Capability (SigCapability)
 import           Pact.Types.ChainMeta
-import           Pact.Types.Command (SomeKeyPairCaps)
+import           Pact.Types.Command (DynKeyPair)
 import           Pact.Types.Gas
 import           System.Random.MWC (Gen)
 import           System.Logger
@@ -371,7 +372,7 @@ data TXGState = TXGState
 
 data TXGConfig = TXGConfig
   { confTimingDist :: !(Maybe TimingDistribution)
-  , confKeysets :: !(Map ChainId (Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))))
+  , confKeysets :: !(Map ChainId (Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))))
   , confHost :: !HostAddress
   , confManager :: !Manager
   , confVersion :: !ChainwebVersion

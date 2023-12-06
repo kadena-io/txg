@@ -26,7 +26,7 @@ common commons
     -funclutter-valid-hole-fits
 
   build-depends:
-    , aeson
+    , aeson                 >=2.2
     , attoparsec            >=0.13
     , base                  >=4.11  && <5
     , base16-bytestring

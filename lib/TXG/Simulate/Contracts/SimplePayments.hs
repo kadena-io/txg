@@ -13,9 +13,10 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import           NeatInterpolation
 import           Pact.ApiReq (mkExec)
+import           Pact.Types.Capability (SigCapability)
 import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
-import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
+import           Pact.Types.Command (Command(..), DynKeyPair)
 import           System.Random
 import           Text.Printf
 import           TXG.Simulate.Contracts.Common
@@ -25,9 +26,9 @@ import           TXG.Fake
 
 ---
 
-simplePaymentsContractLoader :: ChainwebVersion -> PublicMeta -> NEL.NonEmpty SomeKeyPairCaps -> IO (Command Text)
+simplePaymentsContractLoader :: ChainwebVersion -> PublicMeta -> NEL.NonEmpty (DynKeyPair,[SigCapability]) -> IO (Command Text)
 simplePaymentsContractLoader v meta adminKS = do
-    let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
+    let theData = object ["admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS]
     mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = [text| ;; Simple accounts model.
@@ -82,7 +83,7 @@ simplePaymentsContractLoader v meta adminKS = do
   |]
 
 mkRandomSimplePaymentRequest
-  :: M.Map Account (NEL.NonEmpty SomeKeyPairCaps)
+  :: M.Map Account (NEL.NonEmpty (DynKeyPair,[SigCapability]))
   -> IO (FGen SimplePaymentRequest)
 mkRandomSimplePaymentRequest _ = do
   request <- randomRIO @Int (0, 1)
@@ -108,23 +109,23 @@ mkRandomSimplePaymentRequest _ = do
 data SimplePaymentRequest
   = SPRequestGetBalance Account
   | SPRequestPay Account Account Amount
-  | SPCreateAccount Account Balance (NEL.NonEmpty SomeKeyPairCaps)
+  | SPCreateAccount Account Balance (NEL.NonEmpty (DynKeyPair,[SigCapability]))
 
 simplePayReq
   :: ChainwebVersion
   -> PublicMeta
   -> SimplePaymentRequest
-  -> Maybe (NEL.NonEmpty SomeKeyPairCaps)
+  -> Maybe (NEL.NonEmpty (DynKeyPair,[SigCapability]))
   -> IO (Command Text)
 simplePayReq v meta (SPCreateAccount (Account account) (Balance initBal) ks) _ = do
-  adminKS <- testSomeKeyPairs
+  adminKS <- testDynKeyPairs
   let theCode = T.pack $ printf "(payments.create-account \"%s\" %s)" account (show initBal)
-      theData = object [ "keyset" .= fmap (formatB16PubKey . fst) ks
-                       , "admin-keyset" .= fmap (formatB16PubKey . fst) adminKS ]
+      theData = object [ "keyset" .= fmap (formatPubKeyForCmd . fst) ks
+                       , "admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS ]
   mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq v meta (SPRequestGetBalance (Account account)) _ = do
-  adminKS <- testSomeKeyPairs
+  adminKS <- testDynKeyPairs
   let theCode = T.pack $ printf "(payments.get-balance \"%s\")" account
   mkExec theCode Null meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
 

@@ -61,9 +61,10 @@ import           Data.Text.Encoding
 import qualified Data.Yaml as Y
 import           GHC.Generics
 import           Pact.ApiReq (ApiKeyPair(..), mkExec, mkKeyPairs)
+import           Pact.Types.Capability (SigCapability)
 import qualified Pact.Types.ChainId as CM
 import qualified Pact.Types.ChainMeta as CM
-import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
+import           Pact.Types.Command (Command(..), DynKeyPair(DynEd25519KeyPair))
 import           Pact.Types.Crypto
 import           Pact.Types.Gas
 import           Text.Printf
@@ -77,12 +78,12 @@ createPaymentsAccount
     :: ChainwebVersion
     -> CM.PublicMeta
     -> String
-    -> IO (NEL.NonEmpty SomeKeyPairCaps, Command Text)
+    -> IO (NEL.NonEmpty (DynKeyPair,[SigCapability]), Command Text)
 createPaymentsAccount v meta name = do
-    adminKS <- testSomeKeyPairs
-    nameKeyset <- (\k -> [(k, [])]) <$> genKeyPair defaultScheme
+    adminKS <- testDynKeyPairs
+    nameKeyset <- (\k -> [(DynEd25519KeyPair k, [])]) <$> genKeyPair
     let theData = object
-          [ fromText (T.pack (name ++ "-keyset")) .= fmap (formatB16PubKey . fst) nameKeyset
+          [ fromText (T.pack (name ++ "-keyset")) .= fmap (formatPubKeyForCmd . fst) nameKeyset
           ]
     res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (NEL.fromList nameKeyset, res)
@@ -93,28 +94,28 @@ createCoinAccount
     :: ChainwebVersion
     -> CM.PublicMeta
     -> String
-    -> IO (NEL.NonEmpty SomeKeyPairCaps, Command Text)
+    -> IO (NEL.NonEmpty (DynKeyPair,[SigCapability]), Command Text)
 createCoinAccount v meta name = do
-    adminKS <- testSomeKeyPairs
+    adminKS <- testDynKeyPairs
     nameKeyset <- NEL.fromList <$> getKeyset
-    let theData = object [fromText (T.pack (name ++ "-keyset")) .= fmap (formatB16PubKey . fst) nameKeyset]
+    let theData = object [fromText (T.pack (name ++ "-keyset")) .= fmap (formatPubKeyForCmd . fst) nameKeyset]
     res <- mkExec theCode theData meta (NEL.toList adminKS) (Just $ CM.NetworkId $ chainwebVersionToText v) Nothing
     pure (nameKeyset, res)
   where
     theCode = T.pack $ printf "(coin.create-account \"%s\" (read-keyset \"%s\"))" name name
     isSenderAccount name' = name' `elem` map getAccount coinAccountNames
 
-    getKeyset :: IO [SomeKeyPairCaps]
+    getKeyset :: IO [(DynKeyPair,[SigCapability])]
     getKeyset
       | isSenderAccount name = do
           keypair <- stockKey (T.pack name)
           mkKeyPairs [keypair]
-      | otherwise = (\k -> [(k, [])]) <$> genKeyPair defaultScheme
+      | otherwise = (\k -> [(DynEd25519KeyPair k, [])]) <$> genKeyPair
 
-createPaymentsAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps, Command Text))
+createPaymentsAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NEL.NonEmpty (NEL.NonEmpty (DynKeyPair,[SigCapability]), Command Text))
 createPaymentsAccounts v meta = traverse (createPaymentsAccount v meta) names
 
-createCoinAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NEL.NonEmpty (NEL.NonEmpty SomeKeyPairCaps, Command Text))
+createCoinAccounts :: ChainwebVersion -> CM.PublicMeta -> IO (NEL.NonEmpty (NEL.NonEmpty (DynKeyPair,[SigCapability]), Command Text))
 createCoinAccounts v meta = traverse (createCoinAccount v meta) names
 
 coinAccountNames :: [Account]

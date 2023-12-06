@@ -21,9 +21,10 @@ import qualified Data.Text as T
 import           GHC.Generics
 import           NeatInterpolation
 import           Pact.ApiReq (mkExec)
+import           Pact.Types.Capability (SigCapability)
 import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
-import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
+import           Pact.Types.Command (Command(..), DynKeyPair)
 import           Text.Printf
 import           TXG.Fake
 import           TXG.Simulate.Utils
@@ -34,10 +35,10 @@ import           TXG.Utils
 helloWorldContractLoader
     :: ChainwebVersion
     -> PublicMeta
-    -> NEL.NonEmpty SomeKeyPairCaps
+    -> NEL.NonEmpty (DynKeyPair,[SigCapability])
     -> IO (Command Text)
 helloWorldContractLoader v meta adminKS = do
-  let theData = object ["admin-keyset" .= fmap (formatB16PubKey . fst) adminKS]
+  let theData = object ["admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS]
   mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = [text|

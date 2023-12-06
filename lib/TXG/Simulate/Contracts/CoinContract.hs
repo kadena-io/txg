@@ -11,9 +11,10 @@ import qualified Data.Map.Strict as M
 import           Data.Text (Text)
 import qualified Data.Text as T
 import           Pact.ApiReq (mkExec)
+import           Pact.Types.Capability (SigCapability)
 import           Pact.Types.ChainId
 import           Pact.Types.ChainMeta (PublicMeta(..))
-import           Pact.Types.Command (Command(..), SomeKeyPairCaps)
+import           Pact.Types.Command (Command(..), DynKeyPair)
 import           System.Random
 import           Text.Printf
 import           TXG.Simulate.Contracts.Common
@@ -30,7 +31,7 @@ data CoinContractRequest
   | CoinTransferAndCreate SenderName ReceiverName Guard Amount
   deriving Show
 
-newtype Guard = Guard (NEL.NonEmpty SomeKeyPairCaps)
+newtype Guard = Guard (NEL.NonEmpty (DynKeyPair,[SigCapability]))
 newtype SenderName = SenderName Account
 newtype ReceiverName = ReceiverName Account
 
@@ -46,7 +47,7 @@ instance Show ReceiverName where
 
 mkRandomCoinContractRequest
     :: Bool
-    -> M.Map Account (NEL.NonEmpty SomeKeyPairCaps)
+    -> M.Map Account (NEL.NonEmpty (DynKeyPair,[SigCapability]))
     -> IO (FGen CoinContractRequest)
 mkRandomCoinContractRequest transfersPred kacts = do
     request <- bool (randomRIO @Int (0, 1)) (return 1) transfersPred
@@ -70,7 +71,7 @@ mkRandomCoinContractRequest transfersPred kacts = do
 createCoinContractRequest
     :: ChainwebVersion
     -> PublicMeta
-    -> NEL.NonEmpty SomeKeyPairCaps
+    -> NEL.NonEmpty (DynKeyPair,[SigCapability])
     -> CoinContractRequest
     -> IO (Command Text)
 createCoinContractRequest v meta ks request =
@@ -84,7 +85,7 @@ createCoinContractRequest v meta ks request =
               ("create-account-guard" :: String)
             theData =
               object
-                [ "create-account-guard" .= fmap (formatB16PubKey . fst) g
+                [ "create-account-guard" .= fmap (formatPubKeyForCmd . fst) g
                 ]
         mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
       CoinAccountBalance (Account account) -> do
@@ -106,7 +107,7 @@ createCoinContractRequest v meta ks request =
               (fromRational @Double $ toRational amount)
             theData =
               object
-                [ "receiver-guard" .= fmap (formatB16PubKey . fst) g
+                [ "receiver-guard" .= fmap (formatPubKeyForCmd . fst) g
                 ]
         mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
