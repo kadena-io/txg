@@ -20,6 +20,7 @@ import           Network.HostAddress
 import           Network.HTTP.Client hiding (Proxy(..))
 import           Pact.ApiReq
 import           Pact.Types.API
+import           Pact.Types.Capability (SigCapability)
 import           Pact.Types.ChainId (NetworkId(..))
 import           Pact.Types.ChainMeta
 import           Pact.Types.Command
@@ -108,7 +109,7 @@ cmd
     -> Value
     -- ^ Env data
     -> PublicMeta
-    -> [SomeKeyPairCaps]
+    -> [(DynKeyPair,[SigCapability])]
     -> Maybe NetworkId
     -> Maybe Text
     -- ^ Transaction nonce.  If Nothing, then getCurrentTime is used.
@@ -134,7 +135,7 @@ type Amount = Double
 
 data CallBuiltIn'
     = CC CoinContractRequest
-    | SP SimplePaymentRequest (Maybe (NEL.NonEmpty SomeKeyPairCaps))
+    | SP SimplePaymentRequest (Maybe (NEL.NonEmpty (DynKeyPair, [SigCapability])))
     | HelloCode Text
 
 data TxContent
@@ -144,13 +145,13 @@ data TxContent
 
 easyTxToCommand :: TxContent -> IO (Command Text)
 easyTxToCommand txContent = do
-    ks <- testSomeKeyPairs
+    ks <- testDynKeyPairs
     txToCommand defChainwebVersion defPubMeta ks txContent
 
 txToCommand
     :: ChainwebVersion
     -> PublicMeta
-    -> NEL.NonEmpty SomeKeyPairCaps
+    -> NEL.NonEmpty (DynKeyPair, [SigCapability])
     -> TxContent
     -> IO (Command Text)
 txToCommand v pubmeta ks = \case

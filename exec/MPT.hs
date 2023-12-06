@@ -433,7 +433,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
         -> Bool
         -> Verbose
         -> Sim.ChainId
-        -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps)
+        -> Map Sim.Account (NEL.NonEmpty (DynKeyPair,[SigCapability]))
         -> IO (Maybe Text, Command Text)
     coinContract gl gp ttl version transfers (Verbose vb) cid coinaccts = do
       coinContractRequest <- mkRandomCoinContractRequest transfers coinaccts >>= generate
@@ -453,7 +453,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
       meta <- Sim.makeMetaWithSender sender ttl gp gl cid
       (msg,) <$> createCoinContractRequest version meta ks coinContractRequest
 
-    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps) -> (Sim.Account, NEL.NonEmpty SomeKeyPairCaps)
+    mkTransferCaps :: ReceiverName -> Sim.Amount -> (Sim.Account, NEL.NonEmpty (DynKeyPair,[SigCapability])) -> (Sim.Account, NEL.NonEmpty (DynKeyPair,[SigCapability]))
     mkTransferCaps (ReceiverName (Sim.Account r)) (Sim.Amount m) (s@(Sim.Account ss),ks) = (s, (caps <$) <$> ks)
       where caps = [gas,tfr]
             gas = SigCapability (QualifiedName "coin" "GAS" (mkInfo "coin.GAS")) []
@@ -462,7 +462,7 @@ generateTransactions ifCoinOnlyTransfers isVerbose contractIndex = do
                   , PLiteral $ LString $ T.pack r
                   , PLiteral $ LDecimal m]
 
-    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty SomeKeyPairCaps) -> IO (Command Text)
+    payments :: GasLimit -> GasPrice -> CM.TTLSeconds -> ChainwebVersion -> Sim.ChainId -> Map Sim.Account (NEL.NonEmpty (DynKeyPair,[SigCapability])) -> IO (Command Text)
     payments gl gp ttl v cid paymentAccts = do
       paymentsRequest <- mkRandomSimplePaymentRequest paymentAccts >>= generate
       case paymentsRequest of
@@ -513,14 +513,14 @@ coinTransfers nodekey config tv tcut trkeys cfg = do
   where
     buildGenAccountsKeysets
       :: [Sim.Account]
-      -> [NEL.NonEmpty SomeKeyPairCaps]
-      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+      -> [NEL.NonEmpty (DynKeyPair,[SigCapability])]
+      -> Map Sim.Account (Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     buildGenAccountsKeysets accs cks =
       M.fromList $ zipWith go accs cks
 
     go :: Sim.Account
-      -> NEL.NonEmpty SomeKeyPairCaps
-      -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty SomeKeyPairCaps))
+      -> NEL.NonEmpty (DynKeyPair,[SigCapability])
+      -> (Sim.Account, Map Sim.ContractName (NEL.NonEmpty (DynKeyPair,[SigCapability])))
     go name cks = (name, M.singleton (Sim.ContractName "coin") cks)
 
 pactSend
