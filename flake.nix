@@ -48,7 +48,7 @@
 
        devShell = flake.devShell;
 
-       project = pkgs.txg;
+       project = pkgs.txgProject;
     });
 }
 
