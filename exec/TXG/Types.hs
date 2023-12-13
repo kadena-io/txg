@@ -44,12 +44,14 @@ module TXG.Types
   , ChainwebHost(..)
   , TXCount(..)
   , BatchSize(..)
+  , ElasticSearchConfig(..)
   , PollMap
   , PollParams(..)
   , Verbose(..)
   , nelReplicate
   , nelZipWith3
   , toNodeData
+  , httpJson
   ) where
 
 import           Configuration.Utils hiding (Error, Lens')
@@ -195,6 +197,28 @@ instance FromJSON ChainwebHost where
     <*> o .: "p2pPort"
     <*> o .: "servicePort"
 
+data ElasticSearchConfig = ElasticSearchConfig
+  { esHost :: !Hostname
+  , esPort :: !Port
+  , esIndex :: !Text
+  , esApiKey :: !(Maybe Text)
+  } deriving (Show, Generic)
+
+instance ToJSON ElasticSearchConfig where
+  toJSON o = object
+    [ "esHost" .= esHost o
+    , "esPort" .= esPort o
+    , "esIndex" .= esIndex o
+    , "esApiKey" .= esApiKey o
+    ]
+
+instance FromJSON ElasticSearchConfig where
+  parseJSON = withObject "ElasticSearchConfig" $ \o -> ElasticSearchConfig
+    <$> o .: "esHost"
+    <*> o .: "esPort"
+    <*> o .: "esIndex"
+    <*> o .: "esApiKey"
+
 data Args = Args
   { scriptCommand   :: !TXCmd
   , nodeChainIds    :: ![ChainId]
@@ -209,6 +233,7 @@ data Args = Args
   , trackMempoolStatConfig :: !(Maybe PollParams)
   , confirmationDepth :: !Int
   , logLevel :: !LogLevel
+  , elasticSearchConfig :: !(Maybe ElasticSearchConfig)
   } deriving (Show, Generic)
 
 instance J.Encode Args where
@@ -229,6 +254,7 @@ instance ToJSON Args where
     , "trackMempoolStatConfig" .= trackMempoolStatConfig o
     , "confirmationDepth" .= confirmationDepth o
     , "logLevel" .= logLevel o
+    , "elasticSearchConfig" .= elasticSearchConfig o
     ]
 
 toJsonViaEncode :: HasCallStack => J.Encode a => a -> Value
@@ -251,6 +277,7 @@ instance FromJSON (Args -> Args) where
     <*< field @"trackMempoolStatConfig" ..: "trackMempoolStatConfig" % o
     <*< field @"confirmationDepth" ..: "confirmationDepth" % o
     <*< field @"logLevel" ..: "logLevel" % o
+    <*< field @"elasticSearchConfig" ..: "elasticSearchConfig" % o
 
 defaultArgs :: Args
 defaultArgs = Args
@@ -267,6 +294,7 @@ defaultArgs = Args
   , trackMempoolStatConfig = Just defaultPollParams
   , confirmationDepth = 6
   , logLevel = Info
+  , elasticSearchConfig = Nothing
   }
   where
     v :: ChainwebVersion
@@ -325,6 +353,7 @@ scriptConfigParser = id
       <> metavar "INT"
       <> help "Confirmation depth"
   <*< field @"logLevel" .:: pLogLevel
+  <*< field @"elasticSearchConfig" .:: pElasticSearchConfig
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -347,6 +376,30 @@ pChainId = textOption cidFromText
   <> short 'i'
   <> metavar "INT"
   <> help "The specific chain that will receive generated transactions. Can be used multiple times."
+
+pElasticSearchConfig :: O.Parser (Maybe ElasticSearchConfig)
+pElasticSearchConfig = optional $ ElasticSearchConfig
+  <$> pHostname (Just "elastic-search")
+  <*> pPort (Just "elastic-search")
+  <*> pIndexName (Just "transaction-generator")
+  <*> pApiKey Nothing
+
+
+pApiKey :: Maybe Text -> O.Parser (Maybe Text)
+pApiKey def = optional $ strOption
+  % long "elastic-search-api-key"
+  <> short 'k'
+  <> metavar "STRING"
+  <> help "The api key to use for elastic search."
+  <> value (foldr const "" def)
+
+pIndexName :: Maybe Text -> O.Parser Text
+pIndexName def = strOption
+  % long "elastic-search-index-name"
+  <> short 'n'
+  <> metavar "STRING"
+  <> help "The name of the index to write to."
+  <> value (foldr const "transaction-generator" def)
 
 ------------
 -- TXG Monad
@@ -382,6 +435,7 @@ data TXGConfig = TXGConfig
   , confGasPrice :: GasPrice
   , confTTL :: TTLSeconds
   , confTrackMempoolStat :: !(Maybe PollParams)
+  , confElasticSearchConfig :: !(Maybe ElasticSearchConfig)
   } deriving (Generic)
 
 mkTXGConfig :: Maybe TimingDistribution -> Args -> HostAddress -> IO TXGConfig
@@ -399,6 +453,7 @@ mkTXGConfig mdistribution config hostAddr = do
     , confGasPrice = gasPrice config
     , confTTL = timetolive config
     , confTrackMempoolStat = trackMempoolStatConfig config
+    , confElasticSearchConfig = elasticSearchConfig config
     }
 
 -- -------------------------------------------------------------------------- --
@@ -469,3 +524,11 @@ data TimeSpan = TimeSpan
     start_time :: Int64
   , end_time :: Int64
   } deriving Show
+
+httpJson :: FromJSON a => Manager -> Request -> IO a
+httpJson mgr req = do
+    resp <- httpLbs req mgr
+    case eitherDecode (responseBody resp) of
+        Left e -> error e
+        Right a -> return a
+

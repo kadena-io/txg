@@ -40,6 +40,7 @@ common commons
     , hostaddress
     , http-client
     , http-client-tls
+    , http-client-openssl
     , http-types
     , lens                  >=4.17
     , mtl                   >=2.2

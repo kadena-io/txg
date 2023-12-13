@@ -138,6 +138,7 @@ worker config = do
           , confGasPrice = mpt_gasPrice config
           , confTTL = mpt_timetolive config
           , confTrackMempoolStat = Nothing -- this will be ignored
+          , confElasticSearchConfig = Nothing
           }
       cids <- newIORef $ NES.fromList $ NEL.fromList $ mpt_nodeChainIds config
       _ <- liftIO $ forkFinally (pollLoop cids (mpt_confirmationDepth config) (mpt_dbFile config) (mpt_pollDelay config) tcut trkeys cfg) $ either throwIO pure
@@ -251,6 +252,7 @@ mkMPTConfig mdistribution manager mpt_config hostAddr =
     , confGasPrice = mpt_gasPrice mpt_config
     , confTTL = mpt_timetolive mpt_config
     , confTrackMempoolStat = Nothing -- this will be ignored
+    , confElasticSearchConfig = Nothing -- this will be ignored
     }
 
 data ApiError = ApiError
