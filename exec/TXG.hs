@@ -94,10 +94,6 @@ import           TXG.Utils
 import           TXG.Types
 
 import qualified Network.HTTP.Client as HTTP
--- import qualified Network.HTTP.Client.OpenSSL as HTTP
--- import qualified Network.HTTP.Types.Header as HTTP
--- import qualified Network.HTTP.Types.Method as HTTP
-
 ---
 
 generateDelay :: MonadIO m => TXG TXGState m Int
@@ -444,7 +440,7 @@ loop confDepth tcut f = forever $ do
         lift . logg Error $ T.pack (show servantError)
       Right rks ->
         case confElasticSearchConfig config of
-          Just esConf -> sendToElasticSearch esConf (confVersion config) start end rks
+          Just esConf -> esPostReq esConf (confVersion config) start end rks
           Nothing -> do
             countTV <- gets gsCounter
             batch <- asks confBatchSize
@@ -478,8 +474,8 @@ loop confDepth tcut f = forever $ do
                 forM_ (Compose msgs) $ \m ->
                   lift . logg Info $ "Actual transaction: " <> m
 
-sendToElasticSearch :: MonadIO m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> TXG TXGState m ()
-sendToElasticSearch esConf version start end rks = do
+esPostReq :: MonadIO m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> TXG TXGState m ()
+esPostReq esConf version start end rks = do
     esReq <- liftIO $ mkElasticSearchRequest esConf version start end rks
     mgr <- asks confManager
     liftIO $ httpJson mgr esReq
