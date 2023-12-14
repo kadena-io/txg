@@ -31,6 +31,7 @@ import           Control.Concurrent.STM
 import           Control.Exception (throwIO)
 import           Control.Lens hiding (op, (.=), (|>))
 import           Control.Monad
+import           Control.Monad.Catch (MonadThrow(..))
 import           Control.Monad.Except
 import           Control.Monad.Reader hiding (local)
 import           Control.Monad.State.Strict
@@ -53,6 +54,7 @@ import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
+import           Data.String.Conv (toS)
 import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -61,6 +63,7 @@ import           Network.HostAddress
 import           Network.HTTP.Client hiding (host)
 import           Network.HTTP.Types
 import           Pact.ApiReq
+import qualified Pact.JSON.Encode as J
 import           Pact.Types.API
 import           Pact.Types.Capability
 import qualified Pact.Types.ChainId as CI
@@ -90,6 +93,7 @@ import           TXG.Simulate.Utils
 import           TXG.Utils
 import           TXG.Types
 
+import qualified Network.HTTP.Client as HTTP
 ---
 
 generateDelay :: MonadIO m => TXG TXGState m Int
@@ -434,38 +438,75 @@ loop confDepth tcut f = forever $ do
     case requestKeys of
       Left servantError ->
         lift . logg Error $ T.pack (show servantError)
-      Right rks -> do
-        countTV <- gets gsCounter
-        batch <- asks confBatchSize
-        liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
-        cnt <- liftIO $ readTVarIO countTV
-        lift . logg Info $ "Transaction count: " <> T.pack (show cnt)
-        lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
-        case confTrackMempoolStat config of
-          Nothing -> pure ()
-          Just p -> do
-            let retrier = retrying policy (const (pure . isLeft)) . const
-                policy :: Monad m => RetryPolicyM m
-                policy =
-                  exponentialBackoff (pollExponentialBackoffInitTime p)
-                  <> limitRetries (pollRetries p)
-                toChunker = toList . _rkRequestKeys
-            forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
-              poll_result <- lift $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
-              case poll_result of
-                Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
-                Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
-                  logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
-                  logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
-                  let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
-                  cstart <- liftIO getCurrentTimeInt64
-                  logger' <- lift ask
-                  liftIO $ (flip withAsync) wait $ do
-                    cend <- loopUntilConfirmationDepth confDepth cid h tcut
-                    logStatIO logger' cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
+      Right rks ->
+        case confElasticSearchConfig config of
+          Just esConf -> esPostReq esConf (confVersion config) start end rks
+          Nothing -> do
+            countTV <- gets gsCounter
+            batch <- asks confBatchSize
+            liftIO . atomically $ modifyTVar' countTV (+ fromIntegral batch)
+            cnt <- liftIO $ readTVarIO countTV
+            lift . logg Info $ "Transaction count: " <> T.pack (show cnt)
+            lift . logg Info $ "Transaction requestKey: " <> T.pack (show rks)
+            case confTrackMempoolStat config of
+              Nothing -> pure ()
+              Just p -> do
+                let retrier = retrying policy (const (pure . isLeft)) . const
+                    policy :: Monad m => RetryPolicyM m
+                    policy =
+                      exponentialBackoff (pollExponentialBackoffInitTime p)
+                      <> limitRetries (pollRetries p)
+                    toChunker = toList . _rkRequestKeys
+                forM_ (chunksOf (pollChunkSize p) $ toChunker rks) $ \chunk -> do
+                  poll_result <- lift $ retrier $ pollRequestKeys' config cid (RequestKeys $ NEL.fromList chunk)
+                  case poll_result of
+                    Left err -> lift $ logg Error $ T.pack $ printf "Caught this error while polling for these request keys (%s) %s" (show $ RequestKeys $ NEL.fromList  chunk) err
+                    Right (poll_start,poll_end,result) -> iforM_ result $ \rk res ->  do
+                      logStat cid rk (TimeUntilMempoolAcceptance (TimeSpan {start_time = start, end_time = end}))
+                      logStat cid rk (TimeUntilBlockInclusion (TimeSpan {start_time = poll_start, end_time = poll_end}))
+                      let h = fromIntegral $ fromJuste $ res ^? _2 . key "blockHeight" . _Integer
+                      cstart <- liftIO getCurrentTimeInt64
+                      logger' <- lift ask
+                      liftIO $ (flip withAsync) wait $ do
+                        cend <- loopUntilConfirmationDepth confDepth cid h tcut
+                        logStatIO logger' cid rk (TimeUntilConfirmationDepth (TimeSpan {start_time = cstart, end_time = cend}))
 
-            forM_ (Compose msgs) $ \m ->
-              lift . logg Info $ "Actual transaction: " <> m
+                forM_ (Compose msgs) $ \m ->
+                  lift . logg Info $ "Actual transaction: " <> m
+
+esPostReq :: MonadIO m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> TXG TXGState m ()
+esPostReq esConf version start end rks = do
+    esReq <- liftIO $ mkElasticSearchRequest esConf version start end rks
+    mgr <- asks confManager
+    liftIO $ httpJson mgr esReq
+
+mkElasticSearchRequest :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> m HTTP.Request
+mkElasticSearchRequest esConf version start end rks = do
+    req <- HTTP.parseUrlThrow $ printf "%s:%d" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf)
+    currentTime <- liftIO $ getCurrentTimeInt64
+    return req
+      { HTTP.method = "POST"
+      , HTTP.path = "/" <> toS idxName <> "/_bulk"
+      , HTTP.responseTimeout = HTTP.responseTimeoutMicro 5_000_000
+      , HTTP.checkResponse = HTTP.throwErrorStatusCodes
+      , HTTP.requestHeaders =
+        ("Content-Type", "application/x-ndjson") :
+        maybe [] (\k -> [("Authoriation", "ApiKey " <> T.encodeUtf8 k)]) (esApiKey esConf)
+      , HTTP.requestBody = body currentTime
+      }
+  where
+    idxName :: String
+    idxName = printf "chainweb-%s-%s" (show version) (show $ esIndex esConf)
+    body now = HTTP.RequestBodyLBS $ mkItem $ mkElasticSearchPayload start end rks now
+    mkItem x = "{\"index\":{}}" <> "\n" <> encode x <> "\n"
+    mkElasticSearchPayload :: Int64 -> Int64 -> RequestKeys -> Int64 -> Value
+    mkElasticSearchPayload s e rs now = object
+      [ "batch-submission-time" .= s
+      , "batch-confirmation-time" .= e
+      , "requestKeys" .= J.toJsonViaEncode rs
+      , "chainwebVersion" .= version
+      , "timestamp" .= now
+      ]
 
 logStatIO :: Logger Text -> ChainId -> RequestKey -> MempoolStat' -> IO ()
 logStatIO logger cid rk ms =
@@ -558,7 +599,7 @@ type ContractLoader
 
 loadContracts :: Args -> ChainwebHost -> NEL.NonEmpty ContractLoader -> IO ()
 loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
-  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat)
+  conf@(TXGConfig _ _ _ _ _ _ (Verbose vb) tgasLimit tgasPrice ttl' _trackMempoolStat _elasticSearchConfig)
         <- mkTXGConfig Nothing config (HostAddress h service)
   forM_ (nodeChainIds config) $ \cid -> do
     !meta <- Sim.makeMeta cid ttl' tgasPrice tgasLimit
@@ -611,7 +652,7 @@ realTransactions
   -> TimingDistribution
   -> LoggerT T.Text IO ()
 realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
-  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat)
+  cfg@(TXGConfig _ _ _ _ v _ _ tgasLimit tgasPrice ttl' _trackMempoolStat _elasticSearchConfig)
         <- liftIO $ mkTXGConfig (Just distribution) config (HostAddress h service)
 
   let chains = maybe (versionChains $ nodeVersion config) NES.fromList
@@ -782,15 +823,18 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
 pollRequestKeys :: Args -> ChainwebHost -> RequestKey -> IO ()
 pollRequestKeys config (ChainwebHost h _p2p service) rkey = do
   cfg <- mkTXGConfig Nothing config (HostAddress h service)
-  response <- pactPoll cfg cid (RequestKeys $ pure rkey)
-  case response of
-    Left _ -> putStrLn "Failure" >> exitWith (ExitFailure 1)
-    Right (PollResponses a)
-      | null a -> do
-        putStrLn "Failure no result returned with error:"
-        print a
-        exitWith (ExitFailure 1)
-      | otherwise -> print a >> exitSuccess
+  case confElasticSearchConfig cfg of
+    Just _ -> putStrLn "Don't poll for request keys when using elasticsearch"
+    Nothing -> do
+      response <- pactPoll cfg cid (RequestKeys $ pure rkey)
+      case response of
+        Left _ -> putStrLn "Failure" >> exitWith (ExitFailure 1)
+        Right (PollResponses a)
+          | null a -> do
+            putStrLn "Failure no result returned with error:"
+            print a
+            exitWith (ExitFailure 1)
+          | otherwise -> print a >> exitSuccess
  where
     -- | It is assumed that the user has passed in a single, specific Chain that
     -- they wish to query.
