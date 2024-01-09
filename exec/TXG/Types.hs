@@ -200,7 +200,7 @@ instance FromJSON ChainwebHost where
 data ElasticSearchConfig = ElasticSearchConfig
   { esHost :: !Hostname
   , esPort :: !Port
-  , esIndex :: !Text
+  , esIndex :: !(Maybe Text)
   , esApiKey :: !(Maybe Text)
   } deriving (Show, Generic)
 
@@ -353,7 +353,7 @@ scriptConfigParser = id
       <> metavar "INT"
       <> help "Confirmation depth"
   <*< field @"logLevel" .:: pLogLevel
-  <*< field @"elasticSearchConfig" .:: pElasticSearchConfig
+  <*< field @"elasticSearchConfig" .:: fmap Just % pElasticSearchConfig
   where
     read' :: Read a => String -> ReadM a
     read' msg = eitherReader (bimap (const msg) id . readEither)
@@ -377,29 +377,26 @@ pChainId = textOption cidFromText
   <> metavar "INT"
   <> help "The specific chain that will receive generated transactions. Can be used multiple times."
 
-pElasticSearchConfig :: O.Parser (Maybe ElasticSearchConfig)
-pElasticSearchConfig = optional $ ElasticSearchConfig
+pElasticSearchConfig :: O.Parser ElasticSearchConfig
+pElasticSearchConfig = ElasticSearchConfig
   <$> pHostname (Just "elastic-search")
   <*> pPort (Just "elastic-search")
-  <*> pIndexName (Just "transaction-generator")
-  <*> pApiKey Nothing
+  <*> pIndexName
+  <*> pApiKey
 
-
-pApiKey :: Maybe Text -> O.Parser (Maybe Text)
-pApiKey def = optional $ strOption
+pApiKey :: O.Parser (Maybe Text)
+pApiKey = optional $ strOption
   % long "elastic-search-api-key"
   <> short 'k'
   <> metavar "STRING"
   <> help "The api key to use for elastic search."
-  <> value (foldr const "" def)
 
-pIndexName :: Maybe Text -> O.Parser Text
-pIndexName def = strOption
+pIndexName :: O.Parser (Maybe Text)
+pIndexName = optional $ strOption
   % long "elastic-search-index-name"
   <> short 'n'
   <> metavar "STRING"
   <> help "The name of the index to write to."
-  <> value (foldr const "transaction-generator" def)
 
 ------------
 -- TXG Monad

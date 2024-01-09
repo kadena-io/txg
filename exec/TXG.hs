@@ -490,8 +490,8 @@ mkElasticSearchRequest esConf version start end rks = do
       , HTTP.responseTimeout = HTTP.responseTimeoutMicro 5_000_000
       , HTTP.checkResponse = HTTP.throwErrorStatusCodes
       , HTTP.requestHeaders =
-        ("Content-Type", "application/x-ndjson") :
-        maybe [] (\k -> [("Authoriation", "ApiKey " <> T.encodeUtf8 k)]) (esApiKey esConf)
+        ("Content-Type", "application/x-ndjson")
+        : maybe [] (\k -> [("Authorization", "ApiKey " <> T.encodeUtf8 k)]) (esApiKey esConf)
       , HTTP.requestBody = body currentTime
       }
   where
