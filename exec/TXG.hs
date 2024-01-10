@@ -482,7 +482,7 @@ esPostReq esConf version start end rks = do
 
 mkElasticSearchRequest :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> m HTTP.Request
 mkElasticSearchRequest esConf version start end rks = do
-    req <- HTTP.parseUrlThrow $ printf "%s:%s" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf)
+    req <- HTTP.parseUrlThrow $ printf "http://%s:%s" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf)
     currentTime <- liftIO $ getCurrentTimeInt64
     return req
       { HTTP.method = "POST"
