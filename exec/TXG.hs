@@ -828,6 +828,10 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
 
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
+  forM_ (elasticSearchConfig config) $ \esConfig -> do
+    esPutReq (confManager cfg) esConfig (nodeVersion config)
+    logger' <- ask
+    esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config)
   let act = loop (confirmationDepth config) tcut (generateTransactions True (verbose config) CoinContract)
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -862,6 +866,10 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
 
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
+  forM_ (elasticSearchConfig config) $ \esConfig -> do
+    esPutReq (confManager gencfg) esConfig (nodeVersion config)
+    logger' <- ask
+    esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config)
   let chs = maybe (versionChains $ nodeVersion config) NES.fromList
              . NEL.nonEmpty
              $ nodeChainIds config
