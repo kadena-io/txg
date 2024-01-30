@@ -496,7 +496,7 @@ mkElasticSearchRequest esConf version start end rks = do
       }
   where
     idxName :: String
-    idxName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (maybe "" show $ esIndex esConf)
+    idxName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
     body now = HTTP.RequestBodyLBS $ mkItem $ mkElasticSearchPayload start end rks now
     mkItem x = "{\"index\":{}}" <> "\n" <> encode x <> "\n"
     mkElasticSearchPayload :: Int64 -> Int64 -> RequestKeys -> Int64 -> Value
