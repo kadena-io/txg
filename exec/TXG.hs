@@ -508,6 +508,35 @@ mkElasticSearchRequest esConf version start end rks = do
       , "timestamp" .= now
       ]
 
+createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> m HTTP.Request
+createElasticsearchIndex esConf version = do
+    let indexName :: String
+        indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
+    req <- HTTP.parseUrlThrow $ printf "http://%s:%s/%s" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
+    let indexSettings = object
+            [ "settings" .= object
+                [ "number_of_shards" .= (3 :: Int)
+                , "number_of_replicas" .= (1 :: Int)
+                ]
+            , "mappings" .= object
+                [ "properties" .= object
+                    [ "batch-submission-time" .= object ["type" .= ("date" :: String), "format" .= ("epoch_millis" :: String)]
+                    , "batch-confirmation-time" .= object ["type" .= ("date" :: String), "format" .= ("epoch_millis" :: String)]
+                    , "requestKeys" .= object ["type" .= ("keyword" :: String)]
+                    , "chainwebVersion" .= object ["type" .= ("text" :: String)]
+                    , "timestamp" .= object ["type" .= ("date" :: String), "format" .= ("epoch_millis" :: String)]
+                    ]
+                ]
+            ]
+    return $
+      req
+        { method = "PUT"
+        , requestBody = RequestBodyLBS $ encode indexSettings
+        , requestHeaders = [("Content-Type", "application/json")]
+        }
+
+
+
 logStatIO :: Logger Text -> ChainId -> RequestKey -> MempoolStat' -> IO ()
 logStatIO logger cid rk ms =
   loggerFunIO logger Info $ T.pack $ show $ MempoolStat
@@ -686,6 +715,9 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
 
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
+  -- create elasticsearch index if ElasticSearchConfig is set
+  forM_ (elasticSearchConfig config) $ \esConfig -> do
+    createElasticsearchIndex esConfig (nodeVersion config)
   let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
