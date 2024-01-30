@@ -513,6 +513,16 @@ esPutReq mgr esConf version = do
   esReq <- liftIO $ createElasticsearchIndex esConf version
   liftIO $ httpJson mgr esReq
 
+esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m ()
+esCheckIndex mgr logger esConf version = do
+  let indexName :: String
+      indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
+  req <- HTTP.parseUrlThrow $ printf "http://%s:%s/%s?pretty" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
+  resp <- liftIO $ httpLbs req mgr
+  case eitherDecode @Value (responseBody resp) of
+    Left err -> throwM $ userError err
+    Right _ -> liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " exists"
+
 createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> m HTTP.Request
 createElasticsearchIndex esConf version = do
     let indexName :: String
@@ -721,7 +731,10 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
   -- create elasticsearch index if ElasticSearchConfig is set
-  forM_ (elasticSearchConfig config) $ \esConfig -> esPutReq (confManager cfg) esConfig (nodeVersion config)
+  forM_ (elasticSearchConfig config) $ \esConfig -> do
+    esPutReq (confManager cfg) esConfig (nodeVersion config)
+    logger' <- ask
+    esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config)
   let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
