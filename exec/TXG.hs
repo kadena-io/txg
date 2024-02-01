@@ -514,7 +514,9 @@ esPutReq mgr esConf version = do
   resp <- liftIO $ httpLbs esReq mgr
   return $ eitherDecode @Value (responseBody resp)
 
-esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m (Either String ())
+newtype IndexExists = IndexExists Bool
+
+esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m (Either String IndexExists)
 esCheckIndex mgr logger esConf version = do
   let indexName :: String
       indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
@@ -535,13 +537,13 @@ esCheckIndex mgr logger esConf version = do
       case val ^? key "error" of
         Just errObj | errConds errObj -> do
             liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " already exists"
-            return $ Right ()
+            return $ Right $ IndexExists True
         _ -> do
           let indexCreated = object ["acknowledged" .= True, "shards_acknowledged" .= True, "index" .= indexName ]
           if val == indexCreated && (status == 200 || status == 201)
             then liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " created"
             else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response: " <> T.pack (show val)
-          return $ Right ()
+          return $ Right $ IndexExists False
 
 createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> m HTTP.Request
 createElasticsearchIndex esConf version = do
@@ -900,8 +902,11 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
           Right _ -> return False
           Left _ -> return True
     logger' <- ask
-    void $ retrying policy toRetry (const $ esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config))
-    void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) esConfig (nodeVersion config))
+    retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config))
+    case retryResp of
+      Left _ -> undefined
+      Right (IndexExists exists) ->
+          unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) esConfig (nodeVersion config))
   let chs = maybe (versionChains $ nodeVersion config) NES.fromList
              . NEL.nonEmpty
              $ nodeChainIds config
