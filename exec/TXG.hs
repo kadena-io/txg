@@ -520,7 +520,7 @@ esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSe
 esCheckIndex mgr logger esConf version = do
   let indexName :: String
       indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
-  req <- HTTP.parseUrlThrow $ printf "http://%s:%s/%s?pretty" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
+  req <- HTTP.parseRequest $ printf "http://%s:%s/%s?pretty" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
   resp <- liftIO $ httpLbs req mgr
 
   case eitherDecode @Value (responseBody resp) of
