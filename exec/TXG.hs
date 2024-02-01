@@ -538,7 +538,7 @@ esCheckIndex mgr logger esConf version = do
             return $ Right ()
         _ -> do
           let indexCreated = object ["acknowledged" .= True, "shards_acknowledged" .= True, "index" .= indexName ]
-          if val == indexCreated && status == 200
+          if val == indexCreated && (status == 200 || statusCode == 201)
             then liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " created"
             else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response: " <> T.pack (show val)
           return $ Right ()
