@@ -509,9 +509,9 @@ mkElasticSearchRequest esConf version start end rks = do
       , "timestamp" .= now
       ]
 
-esPutReq :: MonadIO m => MonadThrow m => Manager -> ElasticSearchConfig -> ChainwebVersion -> m (Either String Value)
-esPutReq mgr esConf version = do
-  esReq <- liftIO $ createElasticsearchIndex esConf version
+esPutReq :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m (Either String Value)
+esPutReq mgr logger' esConf version = do
+  esReq <- liftIO $ createElasticsearchIndex esConf logger' version
   resp <- liftIO $ httpLbs esReq mgr
   return $ eitherDecode @Value (responseBody resp)
 
@@ -555,11 +555,13 @@ esCheckIndex mgr logger esConf version = do
             else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response: " <> T.pack (show val)
           return $ Right $ IndexExists True
 
-createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> m HTTP.Request
-createElasticsearchIndex esConf version = do
+createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> Logger Text -> ChainwebVersion -> m HTTP.Request
+createElasticsearchIndex esConf logger' version = do
     let indexName :: String
         indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
+    liftIO $ loggerFunIO logger' Info $ "Creating index " <> T.pack indexName
     req <- HTTP.parseUrlThrow $ printf "http://%s:%s/%s" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
+    liftIO $ loggerFunIO logger' Info $ "Created index " <> T.pack indexName
     let indexSettings = object
             [ "settings" .= object
                 [ "number_of_shards" .= (3 :: Int)
@@ -773,7 +775,7 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
     case retryResp of
       Left err -> throwM $ ElasticSearchException $ T.pack err
       Right (IndexExists exists) ->
-        unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
+        unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) logger' esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -877,7 +879,7 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
     case retryResp of
       Left err -> throwM $ ElasticSearchException $ T.pack err
       Right (IndexExists exists) ->
-        unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
+        unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) logger' esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (generateTransactions True (verbose config) CoinContract)
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -922,7 +924,7 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
     case retryResp of
       Left err -> throwM $ ElasticSearchException $ T.pack err
       Right (IndexExists exists) ->
-          unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) esConfig (nodeVersion config))
+          unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) logger' esConfig (nodeVersion config))
   let chs = maybe (versionChains $ nodeVersion config) NES.fromList
              . NEL.nonEmpty
              $ nodeChainIds config
