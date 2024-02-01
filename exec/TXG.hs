@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts    #-}
 {-# LANGUAGE FlexibleInstances   #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE MultiWayIf          #-}
 {-# LANGUAGE NumericUnderscores          #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RankNTypes          #-}
@@ -534,16 +535,25 @@ esCheckIndex mgr logger esConf version = do
             , (e ^? key "type" . _String) == Just "resource_already_exists_exception"
             , (e ^? key "index" . _String) == Just (T.pack indexName)
             ]
+          noSuchIndex e = and
+            [ status == 404
+            , (e ^? key "error" . key "type" . _String) == Just "index_not_found_exception"
+            , (e ^? key "error" . key "index" . _String) == Just (T.pack indexName)
+            , (e ^? key "error" . key "reason" . _String) == Just ("no such index [" <> T.pack indexName <> "]")
+            ]
       case val ^? key "error" of
         Just errObj | errConds errObj -> do
             liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " already exists"
             return $ Right $ IndexExists True
+        Just errObj | noSuchIndex errObj -> do
+            liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " does not exist"
+            return $ Right $ IndexExists False
         _ -> do
           let indexCreated = object ["acknowledged" .= True, "shards_acknowledged" .= True, "index" .= indexName ]
           if val == indexCreated && (status == 200 || status == 201)
             then liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " created"
             else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response: " <> T.pack (show val)
-          return $ Right $ IndexExists False
+          return $ Right $ IndexExists True
 
 createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> m HTTP.Request
 createElasticsearchIndex esConf version = do
