@@ -537,9 +537,9 @@ esCheckIndex mgr logger esConf version = do
             ]
           noSuchIndex e = and
             [ status == 404
-            , (e ^? key "error" . key "type" . _String) == Just "index_not_found_exception"
-            , (e ^? key "error" . key "index" . _String) == Just (T.pack indexName)
-            , (e ^? key "error" . key "reason" . _String) == Just ("no such index [" <> T.pack indexName <> "]")
+            , (e ^? key "type" . _String) == Just "index_not_found_exception"
+            , (e ^? key "index" . _String) == Just (T.pack indexName)
+            , (e ^? key "reason" . _String) == Just ("no such index [" <> T.pack indexName <> "]")
             ]
       case val ^? key "error" of
         Just errObj | errConds errObj -> do
