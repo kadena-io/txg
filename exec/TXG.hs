@@ -508,20 +508,24 @@ mkElasticSearchRequest esConf version start end rks = do
       , "timestamp" .= now
       ]
 
-esPutReq :: MonadIO m => MonadThrow m => Manager -> ElasticSearchConfig -> ChainwebVersion -> m ()
+esPutReq :: MonadIO m => MonadThrow m => Manager -> ElasticSearchConfig -> ChainwebVersion -> m (Either String Value)
 esPutReq mgr esConf version = do
   esReq <- liftIO $ createElasticsearchIndex esConf version
-  liftIO $ httpJson mgr esReq
+  resp <- liftIO $ httpLbs esReq mgr
+  return $ eitherDecode @Value (responseBody resp)
 
-esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m ()
+esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m (Either String Value)
 esCheckIndex mgr logger esConf version = do
   let indexName :: String
       indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
   req <- HTTP.parseUrlThrow $ printf "http://%s:%s/%s?pretty" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
   resp <- liftIO $ httpLbs req mgr
+
   case eitherDecode @Value (responseBody resp) of
-    Left err -> throwM $ userError err
-    Right _ -> liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " exists"
+    err@(Left _) -> return err
+    r@(Right _) -> do
+      liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " exists"
+      return r
 
 createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> m HTTP.Request
 createElasticsearchIndex esConf version = do
@@ -732,9 +736,13 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
   gen <- liftIO createSystemRandom
   -- create elasticsearch index if ElasticSearchConfig is set
   forM_ (elasticSearchConfig config) $ \esConfig -> do
-    esPutReq (confManager cfg) esConfig (nodeVersion config)
+    let policy = exponentialBackoff (esDelay esConfig) <> limitRetries 5
+        toRetry _ = \case
+          Right _ -> return False
+          Left _ -> return True
+    void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
     logger' <- ask
-    esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config)
+    void $ retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -829,9 +837,13 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
   forM_ (elasticSearchConfig config) $ \esConfig -> do
-    esPutReq (confManager cfg) esConfig (nodeVersion config)
+    let policy = exponentialBackoff (esDelay esConfig) <> limitRetries 5
+        toRetry _ = \case
+          Right _ -> return False
+          Left _ -> return True
+    void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
     logger' <- ask
-    esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config)
+    void $ retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (generateTransactions True (verbose config) CoinContract)
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -867,9 +879,13 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
   -- Set up values for running the effect stack.
   gen <- liftIO createSystemRandom
   forM_ (elasticSearchConfig config) $ \esConfig -> do
-    esPutReq (confManager gencfg) esConfig (nodeVersion config)
+    let policy = exponentialBackoff (esDelay esConfig) <> limitRetries 5
+        toRetry _ = \case
+          Right _ -> return False
+          Left _ -> return True
+    void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) esConfig (nodeVersion config))
     logger' <- ask
-    esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config)
+    void $ retrying policy toRetry (const $ esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config))
   let chs = maybe (versionChains $ nodeVersion config) NES.fromList
              . NEL.nonEmpty
              $ nodeChainIds config

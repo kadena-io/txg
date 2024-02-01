@@ -202,6 +202,7 @@ data ElasticSearchConfig = ElasticSearchConfig
   , esPort :: !Port
   , esIndex :: !(Maybe Text)
   , esApiKey :: !(Maybe Text)
+  , esDelay :: !Int
   } deriving (Show, Generic)
 
 instance ToJSON ElasticSearchConfig where
@@ -210,6 +211,7 @@ instance ToJSON ElasticSearchConfig where
     , "esPort" .= esPort o
     , "esIndex" .= esIndex o
     , "esApiKey" .= esApiKey o
+    , "esDelay" .= esDelay o
     ]
 
 instance FromJSON ElasticSearchConfig where
@@ -218,6 +220,7 @@ instance FromJSON ElasticSearchConfig where
     <*> o .: "esPort"
     <*> o .: "esIndex"
     <*> o .: "esApiKey"
+    <*> o .: "esDelay"
 
 data Args = Args
   { scriptCommand   :: !TXCmd
@@ -383,6 +386,14 @@ pElasticSearchConfig = ElasticSearchConfig
   <*> pPort (Just "elastic-search")
   <*> pIndexName
   <*> pApiKey
+  <*> pDelay
+
+pDelay :: O.Parser Int
+pDelay = option auto
+  % long "elastic-search-delay"
+  <> short 'd'
+  <> metavar "INT"
+  <> help "The delay in microseconds to wait before sending data to elastic search."
 
 pApiKey :: O.Parser (Maybe Text)
 pApiKey = optional $ strOption
