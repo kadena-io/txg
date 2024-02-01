@@ -758,9 +758,12 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
         toRetry _ = \case
           Right _ -> return False
           Left _ -> return True
-    void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
     logger' <- ask
-    void $ retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
+    retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
+    case retryResp of
+      Left err -> throwM $ ElasticSearchException $ T.pack err
+      Right (IndexExists exists) ->
+        unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -859,9 +862,12 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
         toRetry _ = \case
           Right _ -> return False
           Left _ -> return True
-    void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
     logger' <- ask
-    void $ retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
+    retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
+    case retryResp of
+      Left err -> throwM $ ElasticSearchException $ T.pack err
+      Right (IndexExists exists) ->
+        unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (generateTransactions True (verbose config) CoinContract)
       env = set (field @"confKeysets") accountMap cfg
       stt = TXGState gen tv chains
@@ -904,7 +910,7 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
     logger' <- ask
     retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config))
     case retryResp of
-      Left _ -> undefined
+      Left err -> throwM $ ElasticSearchException $ T.pack err
       Right (IndexExists exists) ->
           unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) esConfig (nodeVersion config))
   let chs = maybe (versionChains $ nodeVersion config) NES.fromList
