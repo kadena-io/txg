@@ -36,6 +36,7 @@ module TXG.Utils
 -- * Misc Utils
 , fromJuste
 , TextFormatException(..)
+, ElasticSearchException(..)
 , encodeToText
 , unsafeManager
 
@@ -97,6 +98,8 @@ import Text.Read (readEither)
 -- Chainweb Version
 
 instance Exception TextFormatException
+
+instance Exception ElasticSearchException
 
 data ChainwebVersion
     = Mainnet01
@@ -199,6 +202,9 @@ encodeToText = T.decodeUtf8 . BL.toStrict . encode
 unsafeManager :: IO Manager
 unsafeManager = newTlsManagerWith
     $ mkManagerSettings (TLSSettingsSimple True True True) Nothing
+
+newtype ElasticSearchException = ElasticSearchException T.Text
+    deriving (Show, Eq, Ord, IsString, Generic)
 
 -- -------------------------------------------------------------------------- --
 -- Commad line
