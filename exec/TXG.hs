@@ -482,6 +482,7 @@ esPostReq :: MonadIO m => ElasticSearchConfig -> ChainwebVersion -> Logger Text 
 esPostReq esConf version logger start end rks = do
     esReq <- liftIO $ mkElasticSearchRequest esConf version start end rks
     mgr <- asks confManager
+    liftIO $ loggerFunIO logger Debug $ "ElasticSearch request: " <> T.pack (show esReq)
     a :: Value <- liftIO $ httpJson mgr esReq
     liftIO $ loggerFunIO logger Debug $ "ElasticSearch response: " <> T.pack (show a)
     return ()
