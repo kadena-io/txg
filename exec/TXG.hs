@@ -442,7 +442,9 @@ loop confDepth tcut f = forever $ do
         lift . logg Error $ T.pack (show servantError)
       Right rks ->
         case confElasticSearchConfig config of
-          Just esConf -> esPostReq esConf (confVersion config) start end rks
+          Just esConf -> do
+            logger' <- lift ask
+            esPostReq esConf (confVersion config) logger' start end rks
           Nothing -> do
             countTV <- gets gsCounter
             batch <- asks confBatchSize
@@ -476,11 +478,13 @@ loop confDepth tcut f = forever $ do
                 forM_ (Compose msgs) $ \m ->
                   lift . logg Info $ "Actual transaction: " <> m
 
-esPostReq :: MonadIO m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> TXG TXGState m ()
-esPostReq esConf version start end rks = do
+esPostReq :: MonadIO m => ElasticSearchConfig -> ChainwebVersion -> Logger Text -> Int64 -> Int64 -> RequestKeys -> TXG TXGState m ()
+esPostReq esConf version logger start end rks = do
     esReq <- liftIO $ mkElasticSearchRequest esConf version start end rks
     mgr <- asks confManager
-    liftIO $ httpJson mgr esReq
+    a :: Value <- liftIO $ httpJson mgr esReq
+    liftIO $ loggerFunIO logger Debug $ "ElasticSearch response: " <> T.pack (show a)
+    return ()
 
 mkElasticSearchRequest :: MonadIO m => MonadThrow m => ElasticSearchConfig -> ChainwebVersion -> Int64 -> Int64 -> RequestKeys -> m HTTP.Request
 mkElasticSearchRequest esConf version start end rks = do
