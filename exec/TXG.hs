@@ -510,10 +510,15 @@ mkElasticSearchRequest esConf version start end rks = do
     mkElasticSearchPayload s e rs now = object
       [ "batch-submission-time" .= s
       , "batch-confirmation-time" .= e
-      , "requestKeys" .= J.toJsonViaEncode rs
       , "chainwebVersion" .= version
       , "timestamp" .= now
       ]
+      `mergeObjects` J.toJsonViaEncode rs
+      -- had to use mergeObjects because otherwise the requestKeys object would be nested under the "requestKeys
+
+mergeObjects :: Value -> Value -> Value
+mergeObjects (Object o1) (Object o2) = Object $ o1 <> o2
+mergeObjects _ _ = error "mergeObjects: expected two objects"
 
 esPutReq :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m (Either String Value)
 esPutReq mgr logger' esConf version = do
