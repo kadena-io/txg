@@ -520,18 +520,20 @@ newtype IndexExists = IndexExists Bool
 
 esCheckIndex :: MonadIO m => MonadThrow m => Manager -> Logger Text -> ElasticSearchConfig -> ChainwebVersion -> m (Either String IndexExists)
 esCheckIndex mgr logger esConf version = do
+
   let indexName :: String
       indexName = printf "chainweb-%s-%s" (T.unpack $ chainwebVersionToText version) (fromMaybe "" $ esIndex esConf)
   req <- HTTP.parseRequest $ printf "http://%s:%s/%s?pretty" (T.unpack $ hostnameToText $ esHost esConf) (show $ esPort esConf) indexName
   resp <- liftIO $ httpLbs req mgr
 
+  let indexCreated = object ["acknowledged" .= True, "shards_acknowledged" .= True, "index" .= indexName]
+      status = statusCode $ responseStatus resp
   case eitherDecode @Value (responseBody resp) of
     Left l -> do
       liftIO $ loggerFunIO logger Error $ "esCheckIndex: Failed to decode response: " <> T.pack (show l)
       return $ Left l
-    Right val -> do
-      let status = statusCode $ responseStatus resp
-          errConds e = and
+    Right val | has (key "error") val -> do
+      let errConds e = and
             [ status == 400
             , (e ^? key "type" . _String) == Just "resource_already_exists_exception"
             , (e ^? key "index" . _String) == Just (T.pack indexName)
@@ -549,12 +551,10 @@ esCheckIndex mgr logger esConf version = do
         Just errObj | noSuchIndex errObj -> do
             liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " does not exist"
             return $ Right $ IndexExists False
-        _ -> do
-          let indexCreated = object ["acknowledged" .= True, "shards_acknowledged" .= True, "index" .= indexName ]
-          if val == indexCreated && (status == 200 || status == 201)
-            then liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " created"
-            else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response:\n" <> (LB.toStrict $ encode val)
-          return $ Right $ IndexExists True
+        _ -> error "IMPOSSIBLE"
+    Right val | val == indexCreated && elem status [200,201] -> return $ Right $ IndexExists True
+    Right _val | status == 200 -> return $ Right $ IndexExists True
+    _ -> throwM $ ElasticSearchException $ LB.toStrict $ responseBody resp
 
 createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> Logger Text -> ChainwebVersion -> m HTTP.Request
 createElasticsearchIndex esConf logger' version = do
