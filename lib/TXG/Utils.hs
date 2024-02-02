@@ -203,7 +203,7 @@ unsafeManager :: IO Manager
 unsafeManager = newTlsManagerWith
     $ mkManagerSettings (TLSSettingsSimple True True True) Nothing
 
-newtype ElasticSearchException = ElasticSearchException T.Text
+newtype ElasticSearchException = ElasticSearchException B.ByteString
     deriving (Show, Eq, Ord, IsString, Generic)
 
 -- -------------------------------------------------------------------------- --

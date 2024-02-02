@@ -55,6 +55,7 @@ import qualified Data.Map as M
 import           Data.Maybe
 import           Data.Sequence.NonEmpty (NESeq(..))
 import qualified Data.Sequence.NonEmpty as NES
+import           Data.String (fromString)
 import           Data.String.Conv (toS)
 import           Data.Text (Text)
 import qualified Data.Text as T
@@ -552,7 +553,7 @@ esCheckIndex mgr logger esConf version = do
           let indexCreated = object ["acknowledged" .= True, "shards_acknowledged" .= True, "index" .= indexName ]
           if val == indexCreated && (status == 200 || status == 201)
             then liftIO $ loggerFunIO logger Info $ "Index " <> T.pack indexName <> " created"
-            else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response: " <> T.pack (show val)
+            else throwM $ ElasticSearchException $ "esCheckIndex: Unexpected response:\n" <> (LB.toStrict $ encode val)
           return $ Right $ IndexExists True
 
 createElasticsearchIndex :: MonadIO m => MonadThrow m => ElasticSearchConfig -> Logger Text -> ChainwebVersion -> m HTTP.Request
@@ -773,7 +774,7 @@ realTransactions config (ChainwebHost h _p2p service) tcut tv distribution = do
     logger' <- ask
     retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
     case retryResp of
-      Left err -> throwM $ ElasticSearchException $ T.pack err
+      Left err -> throwM $ ElasticSearchException $ fromString err
       Right (IndexExists exists) ->
         unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) logger' esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (liftIO randomEnum >>= generateTransactions False (verbose config))
@@ -877,7 +878,7 @@ realCoinTransactions config (ChainwebHost h _p2p service) tcut tv distribution =
     logger' <- ask
     retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager cfg) logger' esConfig (nodeVersion config))
     case retryResp of
-      Left err -> throwM $ ElasticSearchException $ T.pack err
+      Left err -> throwM $ ElasticSearchException $ fromString err
       Right (IndexExists exists) ->
         unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager cfg) logger' esConfig (nodeVersion config))
   let act = loop (confirmationDepth config) tcut (generateTransactions True (verbose config) CoinContract)
@@ -922,7 +923,7 @@ simpleExpressions config (ChainwebHost h _p2p service) tcut tv distribution = do
     logger' <- ask
     retryResp <- retrying policy toRetry (const $ esCheckIndex (confManager gencfg) logger' esConfig (nodeVersion config))
     case retryResp of
-      Left err -> throwM $ ElasticSearchException $ T.pack err
+      Left err -> throwM $ ElasticSearchException $ fromString err
       Right (IndexExists exists) ->
           unless exists $ void $ retrying policy toRetry (const $ esPutReq (confManager gencfg) logger' esConfig (nodeVersion config))
   let chs = maybe (versionChains $ nodeVersion config) NES.fromList
