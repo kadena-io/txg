@@ -152,6 +152,7 @@ generateSimpleTransactions = do
       (Nothing,)
         <$> mkExec (T.pack theCode) theData meta
             (NEL.toList kps)
+            mempty
             (Just $ CI.NetworkId $ chainwebVersionToText v)
             Nothing
 
@@ -988,6 +989,7 @@ singleTransaction args (ChainwebHost h _p2p service) (SingleTX c cid)
       let v = confVersion cfg
       cmd <- mkExec c (datum kps) meta
         (NEL.toList kps)
+        mempty
         (Just $ CI.NetworkId $ chainwebVersionToText v)
         Nothing
       runExceptT (f cfg cmd) >>= \case
@@ -1136,7 +1138,7 @@ createLoader v (Sim.ContractName contractName) meta kp = do
   -- TODO: theData may change later
   let theData = object [ (fromText "admin-keyset") .= fmap (formatPubKeyForCmd . fst) adminKS, (fromText $ T.append (T.pack contractName) "-keyset") .= fmap (formatPubKeyForCmd . fst) kp ]
 
-  mkExec (T.pack theCode) theData meta (NEL.toList adminKS) (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
+  mkExec (T.pack theCode) theData meta (NEL.toList adminKS) mempty (Just $ CI.NetworkId $ chainwebVersionToText v) Nothing
 
 -- Remember that coin contract is already loaded.
 defaultContractLoaders :: ChainwebVersion -> NEL.NonEmpty ContractLoader

@@ -87,7 +87,7 @@ createCoinContractRequest v meta ks request =
               object
                 [ "create-account-guard" .= fmap (formatPubKeyForCmd . fst) g
                 ]
-        mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+        mkExec theCode theData meta (NEL.toList ks) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
       CoinAccountBalance (Account account) -> do
         let theData = Null
             theCode =
@@ -95,7 +95,7 @@ createCoinContractRequest v meta ks request =
               printf
               "(coin.get-balance \"%s\")"
               account
-        mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+        mkExec theCode theData meta (NEL.toList ks) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
       CoinTransferAndCreate (SenderName (Account sn)) (ReceiverName (Account rn)) (Guard g) (Amount amount) -> do
         let theCode =
               T.pack $
@@ -109,7 +109,7 @@ createCoinContractRequest v meta ks request =
               object
                 [ "receiver-guard" .= fmap (formatPubKeyForCmd . fst) g
                 ]
-        mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+        mkExec theCode theData meta (NEL.toList ks) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
       CoinTransfer (SenderName (Account sn)) (ReceiverName (Account rn)) (Amount amount) -> do
         let theCode =
@@ -121,4 +121,4 @@ createCoinContractRequest v meta ks request =
               -- Super janky, but gets the job done for now
               (fromRational @Double $ toRational amount)
             theData = object []
-        mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+        mkExec theCode theData meta (NEL.toList ks) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing

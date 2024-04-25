@@ -26,6 +26,7 @@ import           Pact.Types.ChainMeta
 import           Pact.Types.Command
 import           Pact.Types.Hash
 import           Pact.Types.SPV
+import           Pact.Types.Verifier
 import qualified Pact.JSON.Encode as J
 import           System.Random
 import           Text.Printf
@@ -110,6 +111,7 @@ cmd
     -- ^ Env data
     -> PublicMeta
     -> [(DynKeyPair,[SigCapability])]
+    -> [Verifier ParsedVerifierProof]
     -> Maybe NetworkId
     -> Maybe Text
     -- ^ Transaction nonce.  If Nothing, then getCurrentTime is used.
@@ -117,7 +119,7 @@ cmd
 cmd = mkExec
 
 cmdStr :: String -> IO (Command Text)
-cmdStr str = cmd (T.pack str) Null defPubMeta [] Nothing Nothing
+cmdStr str = cmd (T.pack str) Null defPubMeta [] mempty Nothing Nothing
 
 -- Structured transactions
 

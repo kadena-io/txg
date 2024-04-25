@@ -72,7 +72,7 @@ initAdminKeysetContract
     -> NEL.NonEmpty (DynKeyPair,[SigCapability])
     -> IO (Command Text)
 initAdminKeysetContract v meta adminKS =
-  mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+  mkExec theCode theData meta (NEL.toList adminKS) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = "(define-keyset 'admin-keyset (read-keyset \"admin-keyset\"))"
     theData = object ["admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS]

@@ -190,7 +190,7 @@ sampleKeyPairCaps = do
 
 mkCmdStr :: PublicMeta -> ChainwebVersion -> [(DynKeyPair,[SigCapability])] -> String -> IO (Command Text)
 mkCmdStr meta ver kps str =
-  cmd (T.pack str) Null meta kps (Just (verToPactNetId ver)) Nothing
+  cmd (T.pack str) Null meta kps mempty (Just (verToPactNetId ver)) Nothing
 
 mkCmdDataStr
   :: PublicMeta
@@ -200,7 +200,7 @@ mkCmdDataStr
   -> Value
   -> IO (Command Text)
 mkCmdDataStr meta ver kps cmdCode cmdData =
-  cmd (T.pack cmdCode) cmdData meta kps (Just (verToPactNetId ver)) Nothing
+  cmd (T.pack cmdCode) cmdData meta kps mempty (Just (verToPactNetId ver)) Nothing
 
 verToChainId :: ChainwebVersion -> ChainId
 verToChainId ver = foldr const err $ chainIds ver

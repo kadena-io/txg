@@ -29,7 +29,7 @@ import           TXG.Fake
 simplePaymentsContractLoader :: ChainwebVersion -> PublicMeta -> NEL.NonEmpty (DynKeyPair,[SigCapability]) -> IO (Command Text)
 simplePaymentsContractLoader v meta adminKS = do
     let theData = object ["admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS]
-    mkExec theCode theData meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+    mkExec theCode theData meta (NEL.toList adminKS) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
   where
     theCode = [text| ;; Simple accounts model.
 ;;
@@ -122,15 +122,15 @@ simplePayReq v meta (SPCreateAccount (Account account) (Balance initBal) ks) _ =
   let theCode = T.pack $ printf "(payments.create-account \"%s\" %s)" account (show initBal)
       theData = object [ "keyset" .= fmap (formatPubKeyForCmd . fst) ks
                        , "admin-keyset" .= fmap (formatPubKeyForCmd . fst) adminKS ]
-  mkExec theCode theData meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+  mkExec theCode theData meta (NEL.toList ks) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq v meta (SPRequestGetBalance (Account account)) _ = do
   adminKS <- testDynKeyPairs
   let theCode = T.pack $ printf "(payments.get-balance \"%s\")" account
-  mkExec theCode Null meta (NEL.toList adminKS) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+  mkExec theCode Null meta (NEL.toList adminKS) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq v meta (SPRequestPay (Account from) (Account to) (Amount amount)) (Just ks) = do
   let theCode = T.pack $ printf "(payments.pay \"%s\" \"%s\" %s)" from to (show amount)
-  mkExec theCode Null meta (NEL.toList ks) (Just $ NetworkId $ chainwebVersionToText v) Nothing
+  mkExec theCode Null meta (NEL.toList ks) mempty (Just $ NetworkId $ chainwebVersionToText v) Nothing
 
 simplePayReq _ _ _ _ = error "simplePayReq: impossible"

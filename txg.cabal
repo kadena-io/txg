@@ -70,6 +70,7 @@ library
     , data-default        >=0.7
     , extra               >=1.6
     , file-embed          >=0.0
+    , lens-aeson          >= 1.1
     , neat-interpolation  >=0.3
     , random-bytestring   >=0.1
     , random-strings      >=0.1
