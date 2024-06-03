@@ -711,6 +711,7 @@ queryCut mgr (HostAddress h p) version = do
   res <- handleRequest req mgr
   case res of
     Left err -> do
+      putStrLn $ "The url is :" <> (T.unpack url)
       putStrLn $ "Error: " <> show err
       pure $ Left err
     Right response -> do
