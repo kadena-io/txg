@@ -709,7 +709,13 @@ queryCut mgr (HostAddress h p) version = do
   let url = "https://" <> hostnameToText h <> ":" <> portToText p <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
   req <- parseRequest $ T.unpack url
   res <- handleRequest req mgr
-  pure $ responseBody <$> res
+  case res of
+    Left err -> do
+      putStrLn $ "Error: " <> show err
+      pure $ Left err
+    Right response -> do
+      putStrLn $ "Response: " <> show response
+      pure $ Right $ responseBody response
 
 handleRequest :: Request -> Manager -> IO (Either ApiError (Response LB.ByteString))
 handleRequest req mgr = do
