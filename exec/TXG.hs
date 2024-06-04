@@ -706,12 +706,12 @@ loadContracts config (ChainwebHost h _p2p service) contractLoaders = do
 
 queryCut :: Manager -> HostAddress -> ChainwebVersion -> IO (Either ApiError Cut)
 queryCut mgr (HostAddress h p) version = do
-  let url = "https://" <> hostnameToText h <> ":" <> portToText p <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
+  let url = "GET https://" <> hostnameToText h <> ":" <> portToText p <> "/chainweb/0.0/" <> chainwebVersionToText version <> "/cut"
   req <- parseRequest $ T.unpack url
   res <- handleRequest req mgr
   case res of
     Left err -> do
-      putStrLn $ "The url is :" <> (T.unpack url)
+      putStrLn $ "The url is : " <> T.unpack url
       putStrLn $ "Error: " <> show err
       pure $ Left err
     Right response -> do
